@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import Image from "next/image";
 import { SAMPLE_PRESETS, generateAuthenticSample, generateInpaintedSample, generateFullAISample } from "../lib/dataset/samples";
 import { performPixelForensics } from "../lib/analysis/pixelForensics";
 import { performNoiseAnalysis } from "../lib/analysis/noise";
@@ -28,6 +27,7 @@ export default function HomePage() {
   const [stepIndex, setStepIndex] = useState(0);
   const [results, setResults] = useState(null);
   const [errorMsg, setErrorMsg] = useState(null);
+  const [showDocsModal, setShowDocsModal] = useState(false);
 
   // Viewport Settings
   const [maskVisible, setMaskVisible] = useState(true);
@@ -48,7 +48,7 @@ export default function HomePage() {
   // Handle Drag & Drop / File selection
   const handleFileSelect = useCallback((f) => {
     if (!f || !f.type.startsWith("image/")) return;
-    if (f.size > 40 * 1024 * 1024) { alert("File exceeds 40 MB limit"); return; }
+    if (f.size > 40 * 1024 * 1024) { alert("File exceeds 40 MB threshold"); return; }
     setActivePreset(null);
     setErrorMsg(null);
     setFile(f);
@@ -58,6 +58,23 @@ export default function HomePage() {
     setMaskVisible(true);
     setViewMode("composite");
   }, []);
+
+  // Clipboard Paste Support (Ctrl+V)
+  useEffect(() => {
+    const handlePaste = (e) => {
+      if (!e.clipboardData) return;
+      const items = e.clipboardData.items;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf("image") !== -1) {
+          const blob = items[i].getAsFile();
+          handleFileSelect(blob);
+          break;
+        }
+      }
+    };
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, [handleFileSelect]);
 
   // Load Verified Benchmark Presets
   const loadPreset = async (preset) => {
@@ -147,7 +164,7 @@ export default function HomePage() {
       if (currentStep < PIPELINE_STEPS.length - 1) {
         setStepIndex(currentStep);
       }
-    }, 180);
+    }, 150);
 
     (async () => {
       try {
@@ -374,42 +391,63 @@ export default function HomePage() {
   const handleMouseLeaveCanvas = () => setHoverData(null);
 
   const scorePct = results?.overallScore || 0;
-  const radius = 38;
+  const radius = 28;
   const circumference = 2 * Math.PI * radius;
 
   return (
-    <div className="shell">
-      {/* ── High-End Navigation Bar ── */}
-      <header className="nav-header">
-        <div className="nav-inner">
-          <button className="brand" onClick={resetSession} type="button">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/synthrex_logo.jpg"
-              alt="AI Detect Logo"
-              className="brand-logo-img"
-              width={34}
-              height={34}
-            />
-            <div className="brand-text">
-              <div className="brand-title-wrap">
-                <span className="brand-title">AI Detect</span>
-                <span className="brand-badge">PRO v2.5</span>
-              </div>
-              <span className="brand-sub">SYNTHREX FORENSICS SUITE</span>
-            </div>
-          </button>
+    <div className="app-shell">
+      {/* ── Desktop & Web Header ── */}
+      <header className="app-header">
+        <div className="header-inner">
+          <div className="header-left">
+            <button className="brand-button" onClick={resetSession} type="button">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/synthrex_logo.jpg"
+                alt="AI Detect Logo"
+                className="brand-icon"
+                width={26}
+                height={26}
+              />
+              <span className="brand-name">AI Detect</span>
+              <span className="brand-version">v2.5</span>
+            </button>
 
-          <div className="nav-telemetry">
-            <div className="domain-pill">
-              <span>aidetector.synthrex.in</span>
-            </div>
-            <div className="status-indicator">
-              <span className="status-dot" />
-              <span>Core Ready</span>
+            <nav className="nav-links">
+              <button
+                type="button"
+                className={`nav-link ${state === "idle" ? "active" : ""}`}
+                onClick={resetSession}
+              >
+                Analyze
+              </button>
+              <button
+                type="button"
+                className="nav-link"
+                onClick={() => {
+                  if (state !== "idle") resetSession();
+                  window.scrollTo({ top: 300, behavior: "smooth" });
+                }}
+              >
+                Presets
+              </button>
+              <button
+                type="button"
+                className="nav-link"
+                onClick={() => setShowDocsModal(true)}
+              >
+                Documentation
+              </button>
+            </nav>
+          </div>
+
+          <div className="header-right">
+            <div className="privacy-badge">
+              <span className="privacy-dot" />
+              <span>Local Processing · Private</span>
             </div>
             {state === "results" && (
-              <button className="btn-ghost" onClick={resetSession} type="button">
+              <button className="btn-secondary" onClick={resetSession} type="button">
                 + New Analysis
               </button>
             )}
@@ -417,40 +455,43 @@ export default function HomePage() {
         </div>
       </header>
 
-      <main className="main-container">
+      <main className="workspace-container">
         {errorMsg && (
-          <div style={{ padding: "14px", background: "rgba(244, 63, 94, 0.12)", border: "1px solid var(--signal-ai-bd)", borderRadius: "8px", color: "var(--signal-ai)", margin: "20px 0", fontSize: "13px" }}>
+          <div style={{ padding: "12px 16px", background: "var(--color-suspicious-bg)", border: "1px solid var(--color-suspicious-bd)", borderRadius: "var(--radius-sm)", color: "var(--color-suspicious)", marginBottom: "16px", fontSize: "12px" }}>
             {errorMsg}
           </div>
         )}
 
-        {/* ── 1. IDLE STATE ── */}
+        {/* ── 1. IDLE STATE: WORKSPACE & UPLOAD ── */}
         {state === "idle" && (
-          <div className="idle-hero">
-            <div className="hero-header">
-              <div className="hero-pill-badge">
-                <span>✦ MULTI-SPECTRAL SENSOR FORENSICS & INPAINTING LOCALIZATION</span>
-              </div>
-              <h1 className="hero-heading">
-                Pixel-Level <span className="hero-heading-gradient">AI & Synthetic Media</span> Detection
-              </h1>
-              <p className="hero-subtitle">
-                Advanced spatial noise residual extraction, chromatic illuminant vector profiling, and high-precision splice boundary gradients to detect AI inpaintings, generative fills, and deepfakes.
+          <div>
+            <div className="workspace-intro">
+              <h1 className="workspace-title">AI & Synthetic Media Analysis</h1>
+              <p className="workspace-desc">
+                Analyze images for AI generation, inpainting, manipulation, and synthetic artifacts using multi-signal forensic analysis.
               </p>
             </div>
 
-            {/* Luxury Dropzone */}
+            {/* Compact Drag & Drop Upload Zone */}
             <div
-              className={`swiss-dropzone ${dragOver ? "active" : ""}`}
+              className={`upload-card ${dragOver ? "drag-over" : ""}`}
               onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFileSelect(e.dataTransfer.files[0]); }}
               onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
               onDragLeave={() => setDragOver(false)}
               onClick={() => fileInputRef.current?.click()}
             >
-              <div className="drop-icon-box">⚡</div>
-              <p className="drop-headline">Drop an image or screenshot for forensic inspection</p>
-              <p className="drop-meta">Supports UHD JPEG, PNG Screenshots, WebP &middot; 100% In-Browser Cryptographic Privacy</p>
-              <button type="button" className="drop-cta-btn">Select Image File</button>
+              <div className="upload-icon">↑</div>
+              <div className="upload-title">Upload image for forensic analysis</div>
+              <div className="upload-subtitle">Drag & drop a file here, or paste from clipboard (Ctrl+V)</div>
+              
+              <div className="upload-actions-row">
+                <button type="button" className="btn-primary">Choose image</button>
+              </div>
+
+              <div className="upload-format-tags">
+                <span>PNG · JPEG · WebP · Max 40MB · Client-Side Execution</span>
+              </div>
+
               <input
                 ref={fileInputRef}
                 type="file"
@@ -460,323 +501,343 @@ export default function HomePage() {
               />
             </div>
 
-            {/* Curated Diagnostic Presets */}
-            <div className="bento-section">
-              <div className="section-label-header">
-                <span className="section-label">Verified Diagnostic Presets</span>
-              </div>
-              <div className="bento-sample-grid">
+            {/* Benchmark Preset Repository */}
+            <div className="presets-container">
+              <span className="presets-label">Diagnostic Benchmark Cases</span>
+              <div className="presets-grid">
                 {SAMPLE_PRESETS.map((preset) => (
-                  <div key={preset.id} className="bento-card" onClick={() => loadPreset(preset)}>
-                    <div className="bento-card-header">
-                      <span className={`bento-tag ${preset.id.startsWith('user_') ? 'tag-user' : ''}`}>
+                  <div key={preset.id} className="preset-card" onClick={() => loadPreset(preset)}>
+                    <div className="preset-card-top">
+                      <span className="preset-name">{preset.name}</span>
+                      <span className={`preset-badge ${preset.id.startsWith('user_') ? 'user-case' : ''}`}>
                         {preset.tag}
                       </span>
-                      <span className="bento-arrow">↗</span>
                     </div>
-                    <h3 className="bento-name">{preset.name}</h3>
-                    <p className="bento-desc">{preset.description}</p>
+                    <p className="preset-desc">{preset.description}</p>
                   </div>
                 ))}
               </div>
             </div>
+          </div>
+        )}
 
-            {/* Capability Bar */}
-            <div className="capability-bar">
-              {[
-                "PRNU High-Pass Shot Noise",
-                "Achromatic Text Inpainting Anomaly",
-                "Color Vector Inconsistency",
-                "Splice Boundary Discontinuity",
-                "Edge-Guided Bilateral Contours",
-                "Error Level Analysis (ELA)",
-                "Screenshot & Resample Invariance",
-              ].map((cap) => (
-                <span key={cap} className="cap-chip">{cap}</span>
+        {/* ── 2. PROCESSING STATE ── */}
+        {state === "analyzing" && (
+          <div className="processing-card">
+            <div className="processing-header">
+              <span>Running Multi-Signal Analysis</span>
+              <span className="processing-pulse">PROCESSING</span>
+            </div>
+
+            <div className="progress-track">
+              <div
+                className="progress-fill"
+                style={{ width: `${((stepIndex + 1) / PIPELINE_STEPS.length) * 100}%` }}
+              />
+            </div>
+
+            <div className="steps-list">
+              {PIPELINE_STEPS.map((s, idx) => (
+                <div
+                  key={idx}
+                  className={`step-item ${idx < stepIndex ? "done" : idx === stepIndex ? "active" : ""}`}
+                >
+                  <span>{idx < stepIndex ? "✓" : idx + 1}</span>
+                  <span>{s}</span>
+                </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* ── 2. ANALYZING SCANNER VIEW ── */}
-        {state === "analyzing" && (
-          <div className="scan-container">
-            <div className="scan-card">
-              <div className="scan-header">
-                <span className="scan-title">Executing Multi-Spectral Forensic Matrix</span>
-                <span className="scan-pulse">ANALYZING</span>
-              </div>
-
-              <div className="scan-progress-track">
-                <div
-                  className="scan-progress-fill"
-                  style={{ width: `${((stepIndex + 1) / PIPELINE_STEPS.length) * 100}%` }}
-                />
-              </div>
-
-              <div className="scan-pipeline-steps">
-                {PIPELINE_STEPS.map((s, idx) => (
-                  <div
-                    key={idx}
-                    className={`pipeline-step ${idx < stepIndex ? "completed" : idx === stepIndex ? "active" : ""}`}
-                  >
-                    <div className="step-indicator">
-                      {idx < stepIndex ? "✓" : idx + 1}
-                    </div>
-                    <span>{s}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ── 3. RESULTS BENTO DASHBOARD ── */}
+        {/* ── 3. RESULTS DASHBOARD (Two-Column Desktop) ── */}
         {state === "results" && results && (
-          <div className="results-dashboard">
-            {/* Top Telemetry Strip */}
-            <div className="telemetry-strip">
-              <div className="telemetry-items">
-                <div>DIMENSIONS: <span className="telemetry-val">{results.dimensions}</span></div>
-                <div>PAYLOAD: <span className="telemetry-val">{results.fileSize}</span></div>
-                <div>PIXELS: <span className="telemetry-val">{(results.width * results.height).toLocaleString()}</span></div>
+          <div className="results-container">
+            {/* Meta Toolbar */}
+            <div className="meta-toolbar">
+              <div className="meta-group">
+                <div>DIMENSIONS: <span className="meta-val">{results.dimensions}</span></div>
+                <div>SIZE: <span className="meta-val">{results.fileSize}</span></div>
+                <div>PIXELS: <span className="meta-val">{(results.width * results.height).toLocaleString()}</span></div>
               </div>
-              <div className="telemetry-items">
-                <div>CORE: <span className="telemetry-val" style={{ color: "var(--brand-cyan)" }}>CLIENT FORENSICS V2.5</span></div>
-                <div>HOST: <span className="telemetry-val">aidetector.synthrex.in</span></div>
+              <div className="meta-group">
+                <div>CORE: <span className="meta-val">Client Forensics v2.5</span></div>
+                <div>HOST: <span className="meta-val">aidetector.synthrex.in</span></div>
               </div>
             </div>
 
-            {/* Viewport Control Bar */}
-            <div className="viewport-controls-bar">
-              <div className="mode-pills">
-                <button
-                  type="button"
-                  className={`mode-pill ${viewMode === "composite" ? "active" : ""}`}
-                  onClick={() => setViewMode("composite")}
-                >
-                  Composite Heatmap
-                </button>
-                <button
-                  type="button"
-                  className={`mode-pill ${viewMode === "contour" ? "active" : ""}`}
-                  onClick={() => setViewMode("contour")}
-                >
-                  Pixel Contours
-                </button>
-                <button
-                  type="button"
-                  className={`mode-pill ${viewMode === "noise" ? "active" : ""}`}
-                  onClick={() => setViewMode("noise")}
-                >
-                  PRNU Residuals
-                </button>
-                <button
-                  type="button"
-                  className={`mode-pill ${viewMode === "ela" ? "active" : ""}`}
-                  onClick={() => setViewMode("ela")}
-                >
-                  High-Res ELA
-                </button>
-              </div>
+            {/* 2-Column Responsive Workspace */}
+            <div className="studio-grid">
+              {/* Left Column: Interactive Visualizer */}
+              <div className="visualizer-column">
+                <div className="viewport-panel" ref={stageRef}>
+                  <div className="viewport-topbar">
+                    <div className="mode-segmented">
+                      <button
+                        type="button"
+                        className={`mode-btn ${viewMode === "composite" ? "active" : ""}`}
+                        onClick={() => setViewMode("composite")}
+                      >
+                        Composite Heatmap
+                      </button>
+                      <button
+                        type="button"
+                        className={`mode-btn ${viewMode === "contour" ? "active" : ""}`}
+                        onClick={() => setViewMode("contour")}
+                      >
+                        Pixel Contours
+                      </button>
+                      <button
+                        type="button"
+                        className={`mode-btn ${viewMode === "noise" ? "active" : ""}`}
+                        onClick={() => setViewMode("noise")}
+                      >
+                        PRNU Residuals
+                      </button>
+                      <button
+                        type="button"
+                        className={`mode-btn ${viewMode === "ela" ? "active" : ""}`}
+                        onClick={() => setViewMode("ela")}
+                      >
+                        High-Res ELA
+                      </button>
+                    </div>
 
-              <div className="viewport-toggles">
-                <label className="swiss-switch">
-                  <input
-                    type="checkbox"
-                    checked={splitSliderOn}
-                    onChange={(e) => setSplitSliderOn(e.target.checked)}
-                  />
-                  <span className="switch-track"><span className="switch-thumb" /></span>
-                  Split Slider
-                </label>
+                    <div className="viewport-controls-group">
+                      <label className="control-toggle">
+                        <input
+                          type="checkbox"
+                          checked={splitSliderOn}
+                          onChange={(e) => setSplitSliderOn(e.target.checked)}
+                        />
+                        Split Slider
+                      </label>
 
-                <label className="swiss-switch">
-                  <input
-                    type="checkbox"
-                    checked={maskVisible}
-                    onChange={(e) => setMaskVisible(e.target.checked)}
-                  />
-                  <span className="switch-track"><span className="switch-thumb" /></span>
-                  Diagnostic Mask
-                </label>
+                      <label className="control-toggle">
+                        <input
+                          type="checkbox"
+                          checked={maskVisible}
+                          onChange={(e) => setMaskVisible(e.target.checked)}
+                        />
+                        Overlay Mask
+                      </label>
 
-                {maskVisible && (
-                  <div className="opacity-slider-wrap">
-                    <span>Opacity</span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.05"
-                      value={opacity}
-                      onChange={(e) => setOpacity(+e.target.value)}
-                    />
-                    <span>{Math.round(opacity * 100)}%</span>
+                      {maskVisible && (
+                        <div className="opacity-slider-item">
+                          <span>{Math.round(opacity * 100)}%</span>
+                          <input
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.05"
+                            value={opacity}
+                            onChange={(e) => setOpacity(+e.target.value)}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {splitSliderOn && (
+                    <div className="split-slider-control-bar">
+                      <span>Comparison (Original vs Overlay):</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={sliderPos}
+                        onChange={(e) => setSliderPos(+e.target.value)}
+                      />
+                      <span>{sliderPos}%</span>
+                    </div>
+                  )}
+
+                  <div
+                    className="canvas-viewport-stage"
+                    onMouseMove={handleMouseMoveOnCanvas}
+                    onMouseLeave={handleMouseLeaveCanvas}
+                  >
+                    <canvas ref={mainCanvasRef} />
+                    <canvas ref={overlayCanvasRef} className="overlay-canvas" />
+                  </div>
+                </div>
+
+                {/* Live Floating Inspector HUD */}
+                {hoverData && (
+                  <div
+                    className="live-coord-hud"
+                    style={{
+                      left: `${Math.min(window.innerWidth - 220, hoverData.clientX + 14)}px`,
+                      top: `${Math.min(window.innerHeight - 180, hoverData.clientY + 14)}px`,
+                    }}
+                  >
+                    <div className="hud-header">
+                      <span>X:{hoverData.x} Y:{hoverData.y}</span>
+                      <span style={{ color: hoverData.aiProb >= 40 ? "var(--color-suspicious)" : "var(--color-authentic)", fontWeight: 700 }}>
+                        {hoverData.aiProb >= 40 ? "SUSPICIOUS" : "AUTHENTIC"}
+                      </span>
+                    </div>
+                    <div className="hud-stat-row">
+                      <span>AI Probability</span>
+                      <span className="val">{hoverData.aiProb}%</span>
+                    </div>
+                    <div className="hud-stat-row">
+                      <span>RGB Vector</span>
+                      <span className="val">({hoverData.r}, {hoverData.g}, {hoverData.b})</span>
+                    </div>
+                    <div className="hud-stat-row">
+                      <span>Local Noise (σ²)</span>
+                      <span className="val">{hoverData.noiseVar}</span>
+                    </div>
+                    <div className="hud-stat-row">
+                      <span>Seam Gradient</span>
+                      <span className="val">{hoverData.seamVal}%</span>
+                    </div>
                   </div>
                 )}
               </div>
-            </div>
 
-            {/* Hairline Comparison Slider */}
-            {splitSliderOn && (
-              <div className="split-slider-hairline">
-                <span>Drag to compare Original Photo (Right) vs AI Detection Mask (Left):</span>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={sliderPos}
-                  onChange={(e) => setSliderPos(+e.target.value)}
-                  className="split-slider-input"
-                />
-                <span>{sliderPos}%</span>
-              </div>
-            )}
-
-            {/* Visualizer Canvas Viewport */}
-            <div className="visualizer-viewport" ref={stageRef}>
-              <div
-                className="canvas-stage"
-                onMouseMove={handleMouseMoveOnCanvas}
-                onMouseLeave={handleMouseLeaveCanvas}
-              >
-                <canvas ref={mainCanvasRef} />
-                <canvas ref={overlayCanvasRef} className="overlay-canvas" />
-              </div>
-            </div>
-
-            {/* Live Hover Pixel Inspector HUD */}
-            {hoverData && (
-              <div
-                className="inspector-hud"
-                style={{
-                  left: `${Math.min(window.innerWidth - 250, hoverData.clientX + 16)}px`,
-                  top: `${Math.min(window.innerHeight - 200, hoverData.clientY + 16)}px`,
-                }}
-              >
-                <div className="hud-top">
-                  <span className="hud-coords">X:{hoverData.x} Y:{hoverData.y}</span>
-                  <span className={`hud-pill ${hoverData.aiProb >= 40 ? "ai" : "auth"}`}>
-                    {hoverData.aiProb >= 40 ? "AI ANOMALY" : "AUTHENTIC"}
-                  </span>
-                </div>
-                <div className="hud-data">
-                  <div className="hud-metric-row">
-                    <span>AI Probability</span>
-                    <span className="val" style={{ color: hoverData.aiProb >= 40 ? "var(--signal-ai)" : "var(--signal-auth)" }}>
-                      {hoverData.aiProb}%
+              {/* Right Column: Analysis Summary */}
+              <div className="summary-column">
+                {/* Primary Verdict Card */}
+                <div className="summary-card">
+                  <div className="summary-card-header">
+                    <span className="card-title">Analysis Verdict</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--text-muted)" }}>
+                      Confidence: {results.confidence}
                     </span>
                   </div>
-                  <div className="hud-metric-row">
-                    <span>RGB Vector</span>
-                    <span className="val">({hoverData.r}, {hoverData.g}, {hoverData.b})</span>
-                  </div>
-                  <div className="hud-metric-row">
-                    <span>Noise Var (σ²)</span>
-                    <span className="val">{hoverData.noiseVar}</span>
-                  </div>
-                  <div className="hud-metric-row">
-                    <span>Seam Gradient</span>
-                    <span className="val">{hoverData.seamVal}%</span>
-                  </div>
-                </div>
-              </div>
-            )}
 
-            {/* ── Bento Telemetry Studio ── */}
-            <div className="bento-telemetry-grid">
-              {/* Cell 1: Overall Verdict */}
-              <div className="bento-cell cell-verdict">
-                <div className="section-label-header">
-                  <span className="section-label">Forensic Verdict</span>
-                </div>
-                <div className="verdict-gauge-wrap">
-                  <div className="gauge-svg-box">
-                    <svg viewBox="0 0 88 88" width="88" height="88">
-                      <circle cx="44" cy="44" r={radius} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="6" />
-                      <circle
-                        cx="44" cy="44" r={radius} fill="none"
-                        stroke={scorePct >= 60 ? "var(--signal-ai)" : scorePct >= 30 ? "var(--signal-warn)" : "var(--signal-auth)"}
-                        strokeWidth="6"
-                        strokeLinecap="round"
-                        strokeDasharray={circumference}
-                        strokeDashoffset={circumference - (scorePct / 100) * circumference}
-                        transform="rotate(-90 44 44)"
-                        style={{ transition: "stroke-dashoffset 1s cubic-bezier(0.16, 1, 0.3, 1)" }}
-                      />
-                    </svg>
-                    <span className="gauge-number">{scorePct}%</span>
-                  </div>
+                  <div className="verdict-box">
+                    <div className="verdict-gauge-ring">
+                      <svg viewBox="0 0 64 64" width="64" height="64">
+                        <circle cx="32" cy="32" r={radius} fill="none" stroke="var(--border-hairline)" strokeWidth="5" />
+                        <circle
+                          cx="32" cy="32" r={radius} fill="none"
+                          stroke={scorePct >= 60 ? "var(--color-suspicious)" : scorePct >= 30 ? "var(--color-inconclusive)" : "var(--color-authentic)"}
+                          strokeWidth="5"
+                          strokeLinecap="round"
+                          strokeDasharray={circumference}
+                          strokeDashoffset={circumference - (scorePct / 100) * circumference}
+                          transform="rotate(-90 32 32)"
+                          style={{ transition: "stroke-dashoffset 0.6s var(--ease-standard)" }}
+                        />
+                      </svg>
+                      <span className="verdict-score-text">{scorePct}%</span>
+                    </div>
 
-                  <div className="verdict-content">
-                    <span className={`verdict-badge ${scorePct >= 60 ? "v-red" : scorePct >= 30 ? "v-amber" : "v-green"}`}>
-                      {scorePct >= 60 ? "AI Inpainted / Altered" : scorePct >= 30 ? "Likely AI-Modified" : "Likely Authentic Camera"}
-                    </span>
-                    <span className="verdict-meta">Confidence Index: {results.confidence}</span>
-                    {results.editedAreaPercent > 0 && (
-                      <span className="area-callout">
-                        Detected Inpainting Area: <strong>{results.editedAreaPercent}%</strong>
+                    <div className="verdict-details">
+                      <span className={`verdict-pill ${scorePct >= 60 ? "suspicious" : scorePct >= 30 ? "inconclusive" : "authentic"}`}>
+                        {scorePct >= 60 ? "Likely Manipulated / AI Edited" : scorePct >= 30 ? "Potentially AI Generated" : "Likely Authentic Camera"}
                       </span>
-                    )}
+                      <span className="verdict-subtext">
+                        {results.editedAreaPercent > 0 
+                          ? `Localized inpainting detected across ${results.editedAreaPercent}% of surface.`
+                          : "Uniform natural sensor distribution verified."}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Cell 2: Multi-Spectral Signal Breakdown */}
-              <div className="bento-cell cell-breakdown">
-                <div className="section-label-header">
-                  <span className="section-label">Multi-Spectral Signal Matrix</span>
-                </div>
-                <div className="signal-rows">
+                {/* Multi-Signal Matrix */}
+                <div className="signals-matrix-card">
+                  <span className="card-title">Forensic Signal Matrix</span>
                   {results.breakdown && Object.values(results.breakdown).map((b) => (
-                    <div className="signal-row" key={b.label}>
-                      <span className="signal-name">{b.label}</span>
-                      <div className="signal-track">
+                    <div className="signal-item-row" key={b.label}>
+                      <span className="signal-item-label">{b.label}</span>
+                      <div className="signal-item-bar-track">
                         <div
-                          className={`signal-fill ${b.score >= 60 ? "f-red" : b.score >= 30 ? "f-amber" : "f-green"}`}
-                          style={{ width: `${b.score}%` }}
+                          className="signal-item-bar-fill"
+                          style={{
+                            width: `${b.score}%`,
+                            backgroundColor: b.score >= 60 ? "var(--color-suspicious)" : b.score >= 30 ? "var(--color-inconclusive)" : "var(--color-authentic)"
+                          }}
                         />
                       </div>
-                      <span className="signal-val">{b.score}</span>
+                      <span className="signal-item-score">{b.score}</span>
                     </div>
                   ))}
                 </div>
-              </div>
 
-              {/* Cell 3: Quantitative Geometry */}
-              <div className="bento-cell cell-metrics">
-                <div className="section-label-header">
-                  <span className="section-label">Spatial Geometry</span>
-                </div>
-                <div className="geometry-grid">
-                  <div className="geom-stat">
-                    <span className="geom-lbl">Inpainted Area</span>
-                    <span className="geom-val" style={{ color: "var(--signal-ai)" }}>{results.editedAreaPercent}%</span>
-                  </div>
-                  <div className="geom-stat">
-                    <span className="geom-lbl">Affected Pixels</span>
-                    <span className="geom-val">{results.pixelForensics?.stats?.editedPixelCount?.toLocaleString() || "0"}</span>
-                  </div>
-                  <div className="geom-stat">
-                    <span className="geom-lbl">Sensor Noise (σ²)</span>
-                    <span className="geom-val">{results.noiseAnalysis?.stats?.averageNoiseVariance ? results.noiseAnalysis.stats.averageNoiseVariance.toFixed(1) : "N/A"}</span>
-                  </div>
+                {/* Export Suite */}
+                <div className="export-panel">
+                  <button className="btn-primary" onClick={() => downloadJSON(results)} type="button">
+                    Export Dossier (.JSON)
+                  </button>
+                  <button className="btn-secondary" onClick={() => downloadCanvas(overlayCanvasRef.current, "ai-detect-alpha-mask.png")} type="button">
+                    Save Alpha Mask (.PNG)
+                  </button>
                 </div>
               </div>
+            </div>
 
-              {/* Cell 4: Action Suite */}
-              <div className="bento-cell cell-actions">
-                <div className="section-label-header">
-                  <span className="section-label">Export Suite</span>
+            {/* Detailed Forensic Signal Cards (Below) */}
+            <div className="detailed-signals-section">
+              <div className="forensic-detail-card">
+                <div className="detail-card-head">
+                  <span className="detail-card-title">PRNU Sensor Shot Noise</span>
+                  <span className="detail-card-status" style={{ background: "var(--bg-card)", color: "var(--text-secondary)" }}>
+                    σ²: {results.noiseAnalysis?.stats?.averageNoiseVariance ? results.noiseAnalysis.stats.averageNoiseVariance.toFixed(1) : "N/A"}
+                  </span>
                 </div>
-                <div className="action-stack">
-                  <button className="swiss-btn btn-accent" onClick={() => downloadJSON(results)} type="button">
-                    ↓ Export JSON Dossier
-                  </button>
-                  <button className="swiss-btn" onClick={() => downloadCanvas(overlayCanvasRef.current, "ai-detect-alpha-mask.png")} type="button">
-                    ↓ Save Binary Alpha Mask
-                  </button>
+                <p className="detail-card-desc">
+                  Measures high-frequency sensor photo-response non-uniformity. AI diffusion models typically exhibit unnatural high-frequency noise dropout.
+                </p>
+                <div className="detail-metrics-row">
+                  <span>Demosaicing Pattern</span>
+                  <span style={{ color: results.noiseAnalysis?.stats?.crossChannelScore < 0.2 ? "var(--color-authentic)" : "var(--color-inconclusive)" }}>
+                    {results.noiseAnalysis?.stats?.crossChannelScore < 0.2 ? "Natural Bayer Grid" : "Synthetic Spectrum"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="forensic-detail-card">
+                <div className="detail-card-head">
+                  <span className="detail-card-title">Chromatic & Illuminant Field</span>
+                  <span className="detail-card-status" style={{ background: "var(--bg-card)", color: "var(--text-secondary)" }}>
+                    Vector Delta
+                  </span>
+                </div>
+                <p className="detail-card-desc">
+                  Profiles localized color temperature and chromatic consistency across scene illuminants to flag generative insertions.
+                </p>
+                <div className="detail-metrics-row">
+                  <span>Inpainted Area</span>
+                  <span style={{ color: results.editedAreaPercent > 0 ? "var(--color-suspicious)" : "var(--text-primary)" }}>
+                    {results.editedAreaPercent}%
+                  </span>
+                </div>
+              </div>
+
+              <div className="forensic-detail-card">
+                <div className="detail-card-head">
+                  <span className="detail-card-title">Achromatic & Text Inpainting</span>
+                  <span className="detail-card-status" style={{ background: "var(--bg-card)", color: "var(--text-secondary)" }}>
+                    Diffusion Halo
+                  </span>
+                </div>
+                <p className="detail-card-desc">
+                  Detects glyph alteration and synthetic inpainting on white/desaturated surfaces (such as altered modal dialogs or text replacement).
+                </p>
+                <div className="detail-metrics-row">
+                  <span>Affected Pixels</span>
+                  <span>{results.pixelForensics?.stats?.editedPixelCount?.toLocaleString() || "0"}</span>
+                </div>
+              </div>
+
+              <div className="forensic-detail-card">
+                <div className="detail-card-head">
+                  <span className="detail-card-title">Compression & ELA Residuals</span>
+                  <span className="detail-card-status" style={{ background: "var(--bg-card)", color: "var(--text-secondary)" }}>
+                    Quantization
+                  </span>
+                </div>
+                <p className="detail-card-desc">
+                  Error Level Analysis evaluates recompression loss across 8x8 DCT blocks to identify spliced elements with mismatched compression histories.
+                </p>
+                <div className="detail-metrics-row">
+                  <span>JPEG Grid Invariance</span>
+                  <span>Verified</span>
                 </div>
               </div>
             </div>
@@ -784,13 +845,77 @@ export default function HomePage() {
         )}
       </main>
 
-      {/* ── Synthrex Footer ── */}
-      <footer className="synthrex-footer">
-        <div>
-          <strong>AI Detect</strong> by Synthrex Technologies &middot; Enterprise Pixel Forensics
+      {/* ── Documentation Modal ── */}
+      {showDocsModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.8)",
+            backdropFilter: "blur(6px)",
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "20px",
+          }}
+          onClick={() => setShowDocsModal(false)}
+        >
+          <div
+            style={{
+              maxWidth: "600px",
+              width: "100%",
+              background: "var(--bg-surface)",
+              border: "1px solid var(--border-hairline)",
+              borderRadius: "var(--radius-md)",
+              padding: "24px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "16px",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h2 style={{ fontSize: "16px", fontWeight: 700 }}>Forensic Architecture & Methodology</h2>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setShowDocsModal(false)}
+                style={{ padding: "4px 8px" }}
+              >
+                ✕
+              </button>
+            </div>
+            <div style={{ fontSize: "13px", color: "var(--text-secondary)", lineHeight: 1.6, display: "flex", flexDirection: "column", gap: "12px" }}>
+              <p>
+                <strong>AI Detect</strong> by Synthrex operates entirely inside the browser utilizing WebAssembly and client-side Float32Array tensors for maximum privacy and zero latency.
+              </p>
+              <p>
+                <strong>1. PRNU Sensor Shot Noise:</strong> Real digital cameras exhibit physical silicon sensor pattern noise. Diffusion models generate synthetic imagery lacking this stochastic noise profile.
+              </p>
+              <p>
+                <strong>2. Chromatic Anomaly Field:</strong> Inpainted elements often diverge from the global color temperature and illuminance field of the original capture.
+              </p>
+              <p>
+                <strong>3. Achromatic Inpainting:</strong> Specialized detection for text replacement and inpainting on white/light backgrounds (such as modified UI screenshots or documents).
+              </p>
+              <p>
+                <strong>4. Error Level Analysis (ELA):</strong> Discloses discrepancies in compression quantization matrices across the image plane.
+              </p>
+            </div>
+          </div>
         </div>
-        <div>
-          Hosted at <a href="https://aidetector.synthrex.in" className="footer-domain-link" target="_blank" rel="noreferrer">aidetector.synthrex.in</a> &middot; Client-Side Spatial Matrix
+      )}
+
+      {/* ── Professional Footer ── */}
+      <footer className="app-footer">
+        <div className="footer-inner">
+          <div>
+            <strong>AI Detect</strong> &middot; Synthrex Technologies &middot; Precision Pixel Forensics
+          </div>
+          <div>
+            Hosted at <a href="https://aidetector.synthrex.in" className="footer-link" target="_blank" rel="noreferrer">aidetector.synthrex.in</a> &middot; 100% Client-Side Private
+          </div>
         </div>
       </footer>
     </div>
