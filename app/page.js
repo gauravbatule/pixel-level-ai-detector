@@ -636,18 +636,15 @@ export default function HomePage() {
                 </div>
               </div>
 
-              {/* Right Side: Realistic Microscopic Pixel Sensor Matrix Inspector */}
+              {/* Right Side: High-Resolution Optical Sensor & Pixel Matrix Illustration */}
               <div className="hero-instrument-schematic">
-                <div className="instrument-top-bar">
-                  <span>MICROSCOPIC PIXEL FORENSICS</span>
-                  <span style={{ color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>LIVE SENSOR MATRIX</span>
-                </div>
-                <div className="instrument-canvas-box">
-                  <canvas ref={waveformCanvasRef} width={340} height={120} />
-                </div>
-                <div className="instrument-readout-row">
-                  <span>CAMERA NOISE: σ² = 14.8</span>
-                  <span style={{ color: "var(--signal-coral)" }}>DIFFUSION FILL: σ² = 1.2</span>
+                <div className="instrument-image-frame">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src="/forensic_hero_schematic.jpg"
+                    alt="Optical Sensor & Forensic Pixel Loupe"
+                    className="instrument-schematic-img"
+                  />
                 </div>
               </div>
             </div>
