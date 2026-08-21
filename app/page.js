@@ -9,14 +9,13 @@ import { computeCompositeScore, generateCompositeHeatmap } from "../lib/analysis
 import { performMetadataAnalysis } from "../lib/analysis/metadata";
 
 const PIPELINE_STEPS = [
-  "Spatial Tensor Initialization",
-  "PRNU Sensor Shot Noise Extraction",
-  "Chromatic & Illuminant Field Vector Discrepancy",
-  "Achromatic & White Surface Glyph Inpainting Analysis",
-  "Splice Boundary & Edge Gradient Discontinuity",
-  "Error Level Analysis (JPEG Quantization Residuals)",
-  "Edge-Guided Bilateral Contour Snapping",
-  "Bento Telemetry & Pixel Mask Generation",
+  "Extracting pixel signals & spatial tensors",
+  "Analyzing PRNU sensor noise residual",
+  "Checking chromatic & illuminant consistency",
+  "Evaluating achromatic text & glyph inpainting",
+  "Computing splice boundary gradients",
+  "Measuring JPEG compression quantization loss",
+  "Generating multi-signal forensic dossier",
 ];
 
 export default function HomePage() {
@@ -27,18 +26,21 @@ export default function HomePage() {
   const [stepIndex, setStepIndex] = useState(0);
   const [results, setResults] = useState(null);
   const [errorMsg, setErrorMsg] = useState(null);
+
+  // Modals & Navigation
   const [showDocsModal, setShowDocsModal] = useState(false);
+  const [showCmdk, setShowCmdk] = useState(false);
+  const [cmdkSearch, setCmdkSearch] = useState("");
 
   // Viewport Settings
   const [maskVisible, setMaskVisible] = useState(true);
   const [opacity, setOpacity] = useState(0.75);
-  const [viewMode, setViewMode] = useState("composite"); // composite | contour | noise | ela
+  const [viewMode, setViewMode] = useState("composite"); // original | composite | contour | noise | ela
   const [splitSliderOn, setSplitSliderOn] = useState(false);
   const [sliderPos, setSliderPos] = useState(50);
 
   // Live Hover HUD
   const [hoverData, setHoverData] = useState(null);
-  const [activePreset, setActivePreset] = useState(null);
 
   const fileInputRef = useRef(null);
   const mainCanvasRef = useRef(null);
@@ -48,8 +50,7 @@ export default function HomePage() {
   // Handle Drag & Drop / File selection
   const handleFileSelect = useCallback((f) => {
     if (!f || !f.type.startsWith("image/")) return;
-    if (f.size > 40 * 1024 * 1024) { alert("File exceeds 40 MB threshold"); return; }
-    setActivePreset(null);
+    if (f.size > 40 * 1024 * 1024) { alert("File exceeds 40 MB limit"); return; }
     setErrorMsg(null);
     setFile(f);
     setImageUrl(URL.createObjectURL(f));
@@ -59,9 +60,42 @@ export default function HomePage() {
     setViewMode("composite");
   }, []);
 
-  // Clipboard Paste Support (Ctrl+V)
+  // Native Clipboard Paste Support (Ctrl+V / Cmd+V)
+  const handlePasteFromClipboard = async () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.read) {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          for (const type of item.types) {
+            if (type.startsWith("image/")) {
+              const blob = await item.getType(type);
+              const f = new File([blob], "clipboard-image.png", { type });
+              handleFileSelect(f);
+              return;
+            }
+          }
+        }
+      }
+      alert("No image found in clipboard. Use Ctrl+V or upload a file.");
+    } catch {
+      fileInputRef.current?.click();
+    }
+  };
+
+  // Keyboard shortcut listener (⌘K / Ctrl+K and global paste)
   useEffect(() => {
-    const handlePaste = (e) => {
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setShowCmdk((prev) => !prev);
+      }
+      if (e.key === "Escape") {
+        setShowCmdk(false);
+        setShowDocsModal(false);
+      }
+    };
+
+    const handleGlobalPaste = (e) => {
       if (!e.clipboardData) return;
       const items = e.clipboardData.items;
       for (let i = 0; i < items.length; i++) {
@@ -72,19 +106,25 @@ export default function HomePage() {
         }
       }
     };
-    window.addEventListener("paste", handlePaste);
-    return () => window.removeEventListener("paste", handlePaste);
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("paste", handleGlobalPaste);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("paste", handleGlobalPaste);
+    };
   }, [handleFileSelect]);
 
-  // Load Verified Benchmark Presets
+  // Load Verified Benchmark Preset
   const loadPreset = async (preset) => {
     setErrorMsg(null);
+    setShowCmdk(false);
+
     if (preset.id === 'user_recaptcha_modal') {
       try {
         const res = await fetch('/recaptcha_edited.png');
         const blob = await res.blob();
         const f = new File([blob], 'recaptcha_edited.png', { type: 'image/png' });
-        setActivePreset(preset);
         setFile(f);
         setImageUrl('/recaptcha_edited.png');
         setState("analyzing");
@@ -102,7 +142,6 @@ export default function HomePage() {
         const res = await fetch('/sand_path_road_red.png');
         const blob = await res.blob();
         const f = new File([blob], 'sand_path_road_red.png', { type: 'image/png' });
-        setActivePreset(preset);
         setFile(f);
         setImageUrl('/sand_path_road_red.png');
         setState("analyzing");
@@ -115,24 +154,20 @@ export default function HomePage() {
       return;
     }
 
-    let canvas, meta = null;
+    let canvas = null;
     if (preset.id === 'inpainting_edit' || preset.id === 'screenshot_edit') {
       const isScreenshot = preset.id === 'screenshot_edit';
       const sample = generateInpaintedSample(800, 500, isScreenshot);
       canvas = sample.editCanvas;
-      meta = sample.metadata;
     } else if (preset.id === 'authentic_photo') {
       canvas = generateAuthenticSample(800, 500);
-      meta = { type: 'authentic', title: 'Authentic Photo Control' };
     } else {
       canvas = generateFullAISample(800, 500);
-      meta = { type: 'full_ai', title: '100% Synthetic Diffusion' };
     }
 
     canvas.toBlob((blob) => {
       if (!blob) return;
       const f = new File([blob], `${preset.id}.png`, { type: 'image/png' });
-      setActivePreset(preset);
       setFile(f);
       setImageUrl(canvas.toDataURL('image/png'));
       setState("analyzing");
@@ -148,7 +183,6 @@ export default function HomePage() {
     setImageUrl(null);
     setResults(null);
     setHoverData(null);
-    setActivePreset(null);
     setErrorMsg(null);
   };
 
@@ -286,7 +320,7 @@ export default function HomePage() {
     mctx.drawImage(results.sourceImage, 0, 0, w, h);
 
     // 2. Render Overlay Layer based on ViewMode
-    if (maskVisible) {
+    if (maskVisible && viewMode !== "original") {
       const overlayImgData = octx.createImageData(w, h);
       const targetPixels = overlayImgData.data;
 
@@ -394,46 +428,63 @@ export default function HomePage() {
   const radius = 28;
   const circumference = 2 * Math.PI * radius;
 
+  // Filtered cmdk samples
+  const filteredPresets = SAMPLE_PRESETS.filter(
+    (p) => p.name.toLowerCase().includes(cmdkSearch.toLowerCase()) || p.category.toLowerCase().includes(cmdkSearch.toLowerCase())
+  );
+
   return (
     <div className="app-shell">
-      {/* ── Desktop & Web Header ── */}
+      {/* ── 1. Sophisticated Header Navigation System ── */}
       <header className="app-header">
         <div className="header-inner">
-          <div className="header-left">
-            <button className="brand-button" onClick={resetSession} type="button">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src="/synthrex_logo.jpg"
-                alt="AI Detect Logo"
-                className="brand-icon"
-                width={26}
-                height={26}
-              />
-              <span className="brand-name">AI Detect</span>
-              <span className="brand-version">v2.5</span>
+          <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
+            <button className="brand-lockup" onClick={resetSession} type="button">
+              <div className="brand-logo-frame">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src="/synthrex_logo.jpg"
+                  alt="AI Detect"
+                  className="brand-logo-img"
+                />
+              </div>
+              <div className="brand-titles">
+                <span className="brand-name">AI Detect</span>
+                <span className="brand-forensics-tag">FORENSICS</span>
+              </div>
             </button>
 
-            <nav className="nav-links">
+            <nav className="nav-menu">
               <button
                 type="button"
-                className={`nav-link ${state === "idle" ? "active" : ""}`}
+                className={`nav-item ${state === "idle" ? "active" : ""}`}
                 onClick={resetSession}
               >
                 Analyze
               </button>
               <button
                 type="button"
-                className="nav-link"
+                className="nav-item"
                 onClick={() => {
                   if (state !== "idle") resetSession();
-                  window.scrollTo({ top: 300, behavior: "smooth" });
+                  window.scrollTo({ top: 380, behavior: "smooth" });
                 }}
               >
-                Presets
+                Cases
               </button>
               <button
                 type="button"
-                className="nav-link"
+                className="nav-item"
+                onClick={() => {
+                  if (state !== "idle") resetSession();
+                  window.scrollTo({ top: 600, behavior: "smooth" });
+                }}
+              >
+                Benchmarks
+              </button>
+              <button
+                type="button"
+                className="nav-item"
                 onClick={() => setShowDocsModal(true)}
               >
                 Documentation
@@ -441,13 +492,28 @@ export default function HomePage() {
             </nav>
           </div>
 
-          <div className="header-right">
-            <div className="privacy-badge">
-              <span className="privacy-dot" />
-              <span>Local Processing · Private</span>
+          <div className="header-actions">
+            <button
+              type="button"
+              className="cmdk-trigger-btn"
+              onClick={() => setShowCmdk(true)}
+            >
+              <span>Quick Action</span>
+              <span className="cmdk-kbd">⌘K</span>
+            </button>
+
+            <div className="privacy-pill">
+              <span className="status-indicator-dot" />
+              <span>Local processing</span>
             </div>
+
             {state === "results" && (
-              <button className="btn-secondary" onClick={resetSession} type="button">
+              <button
+                type="button"
+                className="btn-primary-workstation"
+                onClick={resetSession}
+                style={{ padding: "5px 12px", fontSize: "11px" }}
+              >
                 + New Analysis
               </button>
             )}
@@ -457,39 +523,62 @@ export default function HomePage() {
 
       <main className="workspace-container">
         {errorMsg && (
-          <div style={{ padding: "12px 16px", background: "var(--color-suspicious-bg)", border: "1px solid var(--color-suspicious-bd)", borderRadius: "var(--radius-sm)", color: "var(--color-suspicious)", marginBottom: "16px", fontSize: "12px" }}>
+          <div style={{ padding: "12px 16px", background: "var(--signal-manipulated-bg)", border: "1px solid var(--signal-manipulated-bd)", borderRadius: "var(--radius-sm)", color: "var(--signal-manipulated)", marginBottom: "16px", fontSize: "12px" }}>
             {errorMsg}
           </div>
         )}
 
-        {/* ── 1. IDLE STATE: WORKSPACE & UPLOAD ── */}
+        {/* ── 2. IDLE STATE: WORKSPACE & UPLOAD CONSOLE ── */}
         {state === "idle" && (
           <div>
-            <div className="workspace-intro">
-              <h1 className="workspace-title">AI & Synthetic Media Analysis</h1>
-              <p className="workspace-desc">
-                Analyze images for AI generation, inpainting, manipulation, and synthetic artifacts using multi-signal forensic analysis.
+            {/* Main Workspace Header */}
+            <div className="workspace-header">
+              <div className="eyebrow-tag">
+                <span>IMAGE FORENSICS</span>
+              </div>
+              <h1 className="workspace-hero-heading">
+                Analyze an image. Find the evidence.
+              </h1>
+              <p className="workspace-hero-sub">
+                Detect AI generation, manipulation, inpainting, and synthetic artifacts with client-side forensic analysis.
               </p>
             </div>
 
-            {/* Compact Drag & Drop Upload Zone */}
+            {/* Premium Forensic Workstation Upload Surface */}
             <div
-              className={`upload-card ${dragOver ? "drag-over" : ""}`}
+              className={`workstation-upload-box ${dragOver ? "drag-over" : ""}`}
               onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFileSelect(e.dataTransfer.files[0]); }}
               onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
               onDragLeave={() => setDragOver(false)}
               onClick={() => fileInputRef.current?.click()}
             >
-              <div className="upload-icon">↑</div>
-              <div className="upload-title">Upload image for forensic analysis</div>
-              <div className="upload-subtitle">Drag & drop a file here, or paste from clipboard (Ctrl+V)</div>
-              
-              <div className="upload-actions-row">
-                <button type="button" className="btn-primary">Choose image</button>
+              <div className="upload-icon-circle">⤓</div>
+              <div>
+                <div className="upload-title-text">Drop an image to begin</div>
+                <div className="upload-sub-text">or choose a file from your device</div>
               </div>
 
-              <div className="upload-format-tags">
-                <span>PNG · JPEG · WebP · Max 40MB · Client-Side Execution</span>
+              <div className="upload-btn-group" onClick={(e) => e.stopPropagation()}>
+                <button
+                  type="button"
+                  className="btn-primary-workstation"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  Choose image
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary-workstation"
+                  onClick={handlePasteFromClipboard}
+                >
+                  Paste from clipboard
+                </button>
+              </div>
+
+              <div className="upload-formats-footer">
+                <span>PNG · JPEG · WebP · Up to 40 MB</span>
+                <span>&middot;</span>
+                <span>Processed locally in your browser</span>
               </div>
 
               <input
@@ -501,48 +590,90 @@ export default function HomePage() {
               />
             </div>
 
-            {/* Benchmark Preset Repository */}
-            <div className="presets-container">
-              <span className="presets-label">Diagnostic Benchmark Cases</span>
-              <div className="presets-grid">
+            {/* 3-Step "How It Works" Visual Architecture */}
+            <div className="how-it-works-row">
+              <div className="how-step-card">
+                <span className="how-step-num">01 — INSPECT</span>
+                <span className="how-step-title">Signal Extraction</span>
+                <p className="how-step-desc">Extracts high-pass sensor shot noise, PRNU patterns, and demosaicing grids.</p>
+              </div>
+              <div className="how-step-card">
+                <span className="how-step-num">02 — ANALYZE</span>
+                <span className="how-step-title">Forensic Indicators</span>
+                <p className="how-step-desc">Evaluates chromatic fields, diffusion halos, and splice boundary gradients.</p>
+              </div>
+              <div className="how-step-card">
+                <span className="how-step-num">03 — EXPLAIN</span>
+                <span className="how-step-title">Evidence Confidence</span>
+                <p className="how-step-desc">Synthesizes localized pixel anomaly heatmaps with verifiable confidence scoring.</p>
+              </div>
+            </div>
+
+            {/* Rich Visual Sample Cases Section */}
+            <section className="sample-cases-section">
+              <div className="sample-cases-header">
+                <h2 className="sample-cases-title">Explore sample analyses</h2>
+                <p className="sample-cases-sub">See how AI Detect responds to common manipulation patterns.</p>
+              </div>
+
+              <div className="sample-cases-grid">
                 {SAMPLE_PRESETS.map((preset) => (
-                  <div key={preset.id} className="preset-card" onClick={() => loadPreset(preset)}>
-                    <div className="preset-card-top">
-                      <span className="preset-name">{preset.name}</span>
-                      <span className={`preset-badge ${preset.id.startsWith('user_') ? 'user-case' : ''}`}>
-                        {preset.tag}
+                  <div
+                    key={preset.id}
+                    className="sample-case-card"
+                    onClick={() => loadPreset(preset)}
+                  >
+                    <div className="sample-thumb-frame">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={preset.thumbnail}
+                        alt={preset.name}
+                        className="sample-thumb-img"
+                      />
+                      <span className={`sample-tag-overlay ${preset.category.includes('Inpainting') ? 'alert' : ''}`}>
+                        {preset.category}
                       </span>
                     </div>
-                    <p className="preset-desc">{preset.description}</p>
+
+                    <div className="sample-case-body">
+                      <h3 className="sample-case-name">{preset.name}</h3>
+                      <p className="sample-case-desc">{preset.description}</p>
+                      <div className="sample-case-footer">
+                        <span>Analyze sample</span>
+                        <span>→</span>
+                      </div>
+                    </div>
                   </div>
                 ))}
               </div>
-            </div>
+            </section>
           </div>
         )}
 
-        {/* ── 2. PROCESSING STATE ── */}
+        {/* ── 3. LOADING & ANALYSIS PROCESSING STATE ── */}
         {state === "analyzing" && (
-          <div className="processing-card">
-            <div className="processing-header">
-              <span>Running Multi-Signal Analysis</span>
-              <span className="processing-pulse">PROCESSING</span>
+          <div className="processing-console">
+            <div className="console-top">
+              <span className="console-title">Analyzing image</span>
+              <span className="console-badge">PROCESSING</span>
             </div>
 
-            <div className="progress-track">
+            <div className="console-progress-track">
               <div
-                className="progress-fill"
+                className="console-progress-fill"
                 style={{ width: `${((stepIndex + 1) / PIPELINE_STEPS.length) * 100}%` }}
               />
             </div>
 
-            <div className="steps-list">
+            <div className="console-steps-stack">
               {PIPELINE_STEPS.map((s, idx) => (
                 <div
                   key={idx}
-                  className={`step-item ${idx < stepIndex ? "done" : idx === stepIndex ? "active" : ""}`}
+                  className={`console-step ${idx < stepIndex ? "done" : idx === stepIndex ? "active" : ""}`}
                 >
-                  <span>{idx < stepIndex ? "✓" : idx + 1}</span>
+                  <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700 }}>
+                    {idx < stepIndex ? "✓" : `0${idx + 1}`}
+                  </span>
                   <span>{s}</span>
                 </div>
               ))}
@@ -550,80 +681,87 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* ── 3. RESULTS DASHBOARD (Two-Column Desktop) ── */}
+        {/* ── 4. RESULTS STUDIO: LINEAR WORKBENCH (Two-Column Desktop) ── */}
         {state === "results" && results && (
-          <div className="results-container">
-            {/* Meta Toolbar */}
-            <div className="meta-toolbar">
-              <div className="meta-group">
-                <div>DIMENSIONS: <span className="meta-val">{results.dimensions}</span></div>
-                <div>SIZE: <span className="meta-val">{results.fileSize}</span></div>
-                <div>PIXELS: <span className="meta-val">{(results.width * results.height).toLocaleString()}</span></div>
+          <div className="results-studio-wrapper">
+            {/* Top Telemetry Header Bar */}
+            <div className="studio-telemetry-bar">
+              <div className="telemetry-meta-cluster">
+                <div>DIMENSIONS: <span className="telemetry-strong-val">{results.dimensions}</span></div>
+                <div>SIZE: <span className="telemetry-strong-val">{results.fileSize}</span></div>
+                <div>PIXELS: <span className="telemetry-strong-val">{(results.width * results.height).toLocaleString()}</span></div>
               </div>
-              <div className="meta-group">
-                <div>CORE: <span className="meta-val">Client Forensics v2.5</span></div>
-                <div>HOST: <span className="meta-val">aidetector.synthrex.in</span></div>
+              <div className="telemetry-meta-cluster">
+                <div>ENGINE: <span className="telemetry-strong-val">Client Forensics v2.5</span></div>
+                <div>HOST: <span className="telemetry-strong-val">aidetector.synthrex.in</span></div>
               </div>
             </div>
 
-            {/* 2-Column Responsive Workspace */}
-            <div className="studio-grid">
-              {/* Left Column: Interactive Visualizer */}
-              <div className="visualizer-column">
-                <div className="viewport-panel" ref={stageRef}>
-                  <div className="viewport-topbar">
-                    <div className="mode-segmented">
+            {/* Two-Column Workbench */}
+            <div className="studio-two-column-grid">
+              {/* Left Column: Image Viewer Stage */}
+              <div className="viewport-stage-container">
+                <div className="viewer-frame" ref={stageRef}>
+                  <div className="viewer-header-toolbar">
+                    <div className="viewmode-segmented-control">
                       <button
                         type="button"
-                        className={`mode-btn ${viewMode === "composite" ? "active" : ""}`}
+                        className={`viewmode-btn ${viewMode === "original" ? "active" : ""}`}
+                        onClick={() => setViewMode("original")}
+                      >
+                        Original
+                      </button>
+                      <button
+                        type="button"
+                        className={`viewmode-btn ${viewMode === "composite" ? "active" : ""}`}
                         onClick={() => setViewMode("composite")}
                       >
-                        Composite Heatmap
+                        Heatmap
                       </button>
                       <button
                         type="button"
-                        className={`mode-btn ${viewMode === "contour" ? "active" : ""}`}
-                        onClick={() => setViewMode("contour")}
-                      >
-                        Pixel Contours
-                      </button>
-                      <button
-                        type="button"
-                        className={`mode-btn ${viewMode === "noise" ? "active" : ""}`}
+                        className={`viewmode-btn ${viewMode === "noise" ? "active" : ""}`}
                         onClick={() => setViewMode("noise")}
                       >
-                        PRNU Residuals
+                        Noise
                       </button>
                       <button
                         type="button"
-                        className={`mode-btn ${viewMode === "ela" ? "active" : ""}`}
+                        className={`viewmode-btn ${viewMode === "contour" ? "active" : ""}`}
+                        onClick={() => setViewMode("contour")}
+                      >
+                        Edges
+                      </button>
+                      <button
+                        type="button"
+                        className={`viewmode-btn ${viewMode === "ela" ? "active" : ""}`}
                         onClick={() => setViewMode("ela")}
                       >
-                        High-Res ELA
+                        Residual
                       </button>
                     </div>
 
-                    <div className="viewport-controls-group">
-                      <label className="control-toggle">
+                    <div className="viewer-tools-group">
+                      <label className="viewer-toggle-label">
                         <input
                           type="checkbox"
                           checked={splitSliderOn}
                           onChange={(e) => setSplitSliderOn(e.target.checked)}
                         />
-                        Split Slider
+                        Compare
                       </label>
 
-                      <label className="control-toggle">
+                      <label className="viewer-toggle-label">
                         <input
                           type="checkbox"
                           checked={maskVisible}
                           onChange={(e) => setMaskVisible(e.target.checked)}
                         />
-                        Overlay Mask
+                        Overlay
                       </label>
 
-                      {maskVisible && (
-                        <div className="opacity-slider-item">
+                      {maskVisible && viewMode !== "original" && (
+                        <div className="opacity-slider-unit">
                           <span>{Math.round(opacity * 100)}%</span>
                           <input
                             type="range"
@@ -639,8 +777,8 @@ export default function HomePage() {
                   </div>
 
                   {splitSliderOn && (
-                    <div className="split-slider-control-bar">
-                      <span>Comparison (Original vs Overlay):</span>
+                    <div className="split-slider-subbar">
+                      <span>Compare (Original vs Overlay):</span>
                       <input
                         type="range"
                         min="0"
@@ -653,7 +791,7 @@ export default function HomePage() {
                   )}
 
                   <div
-                    className="canvas-viewport-stage"
+                    className="viewport-canvas-mount"
                     onMouseMove={handleMouseMoveOnCanvas}
                     onMouseLeave={handleMouseLeaveCanvas}
                   >
@@ -662,34 +800,34 @@ export default function HomePage() {
                   </div>
                 </div>
 
-                {/* Live Floating Inspector HUD */}
+                {/* Floating Live Pixel Inspector HUD */}
                 {hoverData && (
                   <div
-                    className="live-coord-hud"
+                    className="floating-pixel-hud"
                     style={{
-                      left: `${Math.min(window.innerWidth - 220, hoverData.clientX + 14)}px`,
-                      top: `${Math.min(window.innerHeight - 180, hoverData.clientY + 14)}px`,
+                      left: `${Math.min(window.innerWidth - 230, hoverData.clientX + 14)}px`,
+                      top: `${Math.min(window.innerHeight - 190, hoverData.clientY + 14)}px`,
                     }}
                   >
-                    <div className="hud-header">
+                    <div className="hud-top-meta">
                       <span>X:{hoverData.x} Y:{hoverData.y}</span>
-                      <span style={{ color: hoverData.aiProb >= 40 ? "var(--color-suspicious)" : "var(--color-authentic)", fontWeight: 700 }}>
-                        {hoverData.aiProb >= 40 ? "SUSPICIOUS" : "AUTHENTIC"}
+                      <span style={{ color: hoverData.aiProb >= 40 ? "var(--signal-manipulated)" : "var(--signal-authentic)", fontWeight: 700 }}>
+                        {hoverData.aiProb >= 40 ? "ANOMALOUS" : "NATURAL"}
                       </span>
                     </div>
-                    <div className="hud-stat-row">
+                    <div className="hud-data-row">
                       <span>AI Probability</span>
                       <span className="val">{hoverData.aiProb}%</span>
                     </div>
-                    <div className="hud-stat-row">
+                    <div className="hud-data-row">
                       <span>RGB Vector</span>
                       <span className="val">({hoverData.r}, {hoverData.g}, {hoverData.b})</span>
                     </div>
-                    <div className="hud-stat-row">
-                      <span>Local Noise (σ²)</span>
+                    <div className="hud-data-row">
+                      <span>Noise Var (σ²)</span>
                       <span className="val">{hoverData.noiseVar}</span>
                     </div>
-                    <div className="hud-stat-row">
+                    <div className="hud-data-row">
                       <span>Seam Gradient</span>
                       <span className="val">{hoverData.seamVal}%</span>
                     </div>
@@ -697,146 +835,146 @@ export default function HomePage() {
                 )}
               </div>
 
-              {/* Right Column: Analysis Summary */}
-              <div className="summary-column">
-                {/* Primary Verdict Card */}
-                <div className="summary-card">
-                  <div className="summary-card-header">
-                    <span className="card-title">Analysis Verdict</span>
+              {/* Right Column: Findings & Evidence */}
+              <div className="findings-column">
+                {/* Primary Overall Assessment */}
+                <div className="overall-assessment-card">
+                  <div className="assessment-header">
+                    <span className="assessment-title">Overall Assessment</span>
                     <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--text-muted)" }}>
                       Confidence: {results.confidence}
                     </span>
                   </div>
 
-                  <div className="verdict-box">
-                    <div className="verdict-gauge-ring">
+                  <div className="assessment-gauge-row">
+                    <div className="gauge-svg-wrapper">
                       <svg viewBox="0 0 64 64" width="64" height="64">
                         <circle cx="32" cy="32" r={radius} fill="none" stroke="var(--border-hairline)" strokeWidth="5" />
                         <circle
                           cx="32" cy="32" r={radius} fill="none"
-                          stroke={scorePct >= 60 ? "var(--color-suspicious)" : scorePct >= 30 ? "var(--color-inconclusive)" : "var(--color-authentic)"}
+                          stroke={scorePct >= 60 ? "var(--signal-manipulated)" : scorePct >= 30 ? "var(--signal-uncertain)" : "var(--signal-authentic)"}
                           strokeWidth="5"
                           strokeLinecap="round"
                           strokeDasharray={circumference}
                           strokeDashoffset={circumference - (scorePct / 100) * circumference}
                           transform="rotate(-90 32 32)"
-                          style={{ transition: "stroke-dashoffset 0.6s var(--ease-standard)" }}
+                          style={{ transition: "stroke-dashoffset 0.6s var(--ease-spring)" }}
                         />
                       </svg>
-                      <span className="verdict-score-text">{scorePct}%</span>
+                      <span className="gauge-pct-text">{scorePct}%</span>
                     </div>
 
-                    <div className="verdict-details">
-                      <span className={`verdict-pill ${scorePct >= 60 ? "suspicious" : scorePct >= 30 ? "inconclusive" : "authentic"}`}>
-                        {scorePct >= 60 ? "Likely Manipulated / AI Edited" : scorePct >= 30 ? "Potentially AI Generated" : "Likely Authentic Camera"}
+                    <div className="assessment-verdict-stack">
+                      <span className={`verdict-status-pill ${scorePct >= 60 ? "manipulated" : scorePct >= 30 ? "uncertain" : "authentic"}`}>
+                        {scorePct >= 60 ? "Potential AI Manipulation" : scorePct >= 30 ? "Uncertain / Likely Modified" : "Likely Authentic Camera"}
                       </span>
-                      <span className="verdict-subtext">
+                      <span className="assessment-explanation">
                         {results.editedAreaPercent > 0 
-                          ? `Localized inpainting detected across ${results.editedAreaPercent}% of surface.`
-                          : "Uniform natural sensor distribution verified."}
+                          ? `Localized synthetic inpainting detected on ${results.editedAreaPercent}% of the image.`
+                          : "Consistent physical sensor noise and Bayer demosaicing pattern verified."}
                       </span>
                     </div>
                   </div>
                 </div>
 
-                {/* Multi-Signal Matrix */}
-                <div className="signals-matrix-card">
-                  <span className="card-title">Forensic Signal Matrix</span>
-                  {results.breakdown && Object.values(results.breakdown).map((b) => (
-                    <div className="signal-item-row" key={b.label}>
-                      <span className="signal-item-label">{b.label}</span>
-                      <div className="signal-item-bar-track">
-                        <div
-                          className="signal-item-bar-fill"
-                          style={{
-                            width: `${b.score}%`,
-                            backgroundColor: b.score >= 60 ? "var(--color-suspicious)" : b.score >= 30 ? "var(--color-inconclusive)" : "var(--color-authentic)"
-                          }}
-                        />
-                      </div>
-                      <span className="signal-item-score">{b.score}</span>
-                    </div>
-                  ))}
+                {/* Evidence List & Signal Matrix */}
+                <div className="evidence-list-card">
+                  <span className="assessment-title">Forensic Signals</span>
+                  <table className="evidence-table">
+                    <tbody>
+                      {results.breakdown && Object.values(results.breakdown).map((b) => (
+                        <tr key={b.label}>
+                          <td className="evidence-label-col">{b.label}</td>
+                          <td className="evidence-bar-col">
+                            <div className="mini-bar-track">
+                              <div
+                                className="mini-bar-fill"
+                                style={{
+                                  width: `${b.score}%`,
+                                  backgroundColor: b.score >= 60 ? "var(--signal-manipulated)" : b.score >= 30 ? "var(--signal-uncertain)" : "var(--signal-authentic)"
+                                }}
+                              />
+                            </div>
+                          </td>
+                          <td className="evidence-val-col">{b.score}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
 
-                {/* Export Suite */}
-                <div className="export-panel">
-                  <button className="btn-primary" onClick={() => downloadJSON(results)} type="button">
+                {/* Action Suite */}
+                <div className="export-actions-row">
+                  <button className="btn-dossier-export" onClick={() => downloadJSON(results)} type="button">
                     Export Dossier (.JSON)
                   </button>
-                  <button className="btn-secondary" onClick={() => downloadCanvas(overlayCanvasRef.current, "ai-detect-alpha-mask.png")} type="button">
+                  <button className="btn-mask-export" onClick={() => downloadCanvas(overlayCanvasRef.current, "ai-detect-alpha-mask.png")} type="button">
                     Save Alpha Mask (.PNG)
                   </button>
                 </div>
               </div>
             </div>
 
-            {/* Detailed Forensic Signal Cards (Below) */}
-            <div className="detailed-signals-section">
-              <div className="forensic-detail-card">
-                <div className="detail-card-head">
-                  <span className="detail-card-title">PRNU Sensor Shot Noise</span>
-                  <span className="detail-card-status" style={{ background: "var(--bg-card)", color: "var(--text-secondary)" }}>
+            {/* Detailed Forensic Signal Deep-Dives (Below) */}
+            <div className="forensic-deepdive-grid">
+              <div className="deepdive-card">
+                <div className="deepdive-header">
+                  <span className="deepdive-title">PRNU Sensor Shot Noise</span>
+                  <span className="deepdive-status-tag">
                     σ²: {results.noiseAnalysis?.stats?.averageNoiseVariance ? results.noiseAnalysis.stats.averageNoiseVariance.toFixed(1) : "N/A"}
                   </span>
                 </div>
-                <p className="detail-card-desc">
-                  Measures high-frequency sensor photo-response non-uniformity. AI diffusion models typically exhibit unnatural high-frequency noise dropout.
+                <p className="deepdive-desc">
+                  Photo-Response Non-Uniformity profiles physical silicon sensor imperfections. Synthetic diffusion generators omit stochastic physical sensor patterns.
                 </p>
-                <div className="detail-metrics-row">
-                  <span>Demosaicing Pattern</span>
-                  <span style={{ color: results.noiseAnalysis?.stats?.crossChannelScore < 0.2 ? "var(--color-authentic)" : "var(--color-inconclusive)" }}>
-                    {results.noiseAnalysis?.stats?.crossChannelScore < 0.2 ? "Natural Bayer Grid" : "Synthetic Spectrum"}
+                <div className="deepdive-meta-footer">
+                  <span>Demosaicing Grid</span>
+                  <span style={{ color: results.noiseAnalysis?.stats?.crossChannelScore < 0.2 ? "var(--signal-authentic)" : "var(--signal-uncertain)" }}>
+                    {results.noiseAnalysis?.stats?.crossChannelScore < 0.2 ? "Natural Bayer Grid" : "Synthetic Frequencies"}
                   </span>
                 </div>
               </div>
 
-              <div className="forensic-detail-card">
-                <div className="detail-card-head">
-                  <span className="detail-card-title">Chromatic & Illuminant Field</span>
-                  <span className="detail-card-status" style={{ background: "var(--bg-card)", color: "var(--text-secondary)" }}>
-                    Vector Delta
-                  </span>
+              <div className="deepdive-card">
+                <div className="deepdive-header">
+                  <span className="deepdive-title">Chromatic & Illuminant Field</span>
+                  <span className="deepdive-status-tag">Vector Delta</span>
                 </div>
-                <p className="detail-card-desc">
-                  Profiles localized color temperature and chromatic consistency across scene illuminants to flag generative insertions.
+                <p className="deepdive-desc">
+                  Analyzes localized color temperature distributions across scene illuminants to flag foreign generative insertions.
                 </p>
-                <div className="detail-metrics-row">
+                <div className="deepdive-meta-footer">
                   <span>Inpainted Area</span>
-                  <span style={{ color: results.editedAreaPercent > 0 ? "var(--color-suspicious)" : "var(--text-primary)" }}>
+                  <span style={{ color: results.editedAreaPercent > 0 ? "var(--signal-manipulated)" : "var(--text-primary)" }}>
                     {results.editedAreaPercent}%
                   </span>
                 </div>
               </div>
 
-              <div className="forensic-detail-card">
-                <div className="detail-card-head">
-                  <span className="detail-card-title">Achromatic & Text Inpainting</span>
-                  <span className="detail-card-status" style={{ background: "var(--bg-card)", color: "var(--text-secondary)" }}>
-                    Diffusion Halo
-                  </span>
+              <div className="deepdive-card">
+                <div className="deepdive-header">
+                  <span className="deepdive-title">Achromatic & Text Inpainting</span>
+                  <span className="deepdive-status-tag">Diffusion Halo</span>
                 </div>
-                <p className="detail-card-desc">
+                <p className="deepdive-desc">
                   Detects glyph alteration and synthetic inpainting on white/desaturated surfaces (such as altered modal dialogs or text replacement).
                 </p>
-                <div className="detail-metrics-row">
+                <div className="deepdive-meta-footer">
                   <span>Affected Pixels</span>
                   <span>{results.pixelForensics?.stats?.editedPixelCount?.toLocaleString() || "0"}</span>
                 </div>
               </div>
 
-              <div className="forensic-detail-card">
-                <div className="detail-card-head">
-                  <span className="detail-card-title">Compression & ELA Residuals</span>
-                  <span className="detail-card-status" style={{ background: "var(--bg-card)", color: "var(--text-secondary)" }}>
-                    Quantization
-                  </span>
+              <div className="deepdive-card">
+                <div className="deepdive-header">
+                  <span className="deepdive-title">Compression & ELA Residuals</span>
+                  <span className="deepdive-status-tag">Quantization</span>
                 </div>
-                <p className="detail-card-desc">
+                <p className="deepdive-desc">
                   Error Level Analysis evaluates recompression loss across 8x8 DCT blocks to identify spliced elements with mismatched compression histories.
                 </p>
-                <div className="detail-metrics-row">
-                  <span>JPEG Grid Invariance</span>
+                <div className="deepdive-meta-footer">
+                  <span>JPEG Invariance</span>
                   <span>Verified</span>
                 </div>
               </div>
@@ -845,14 +983,83 @@ export default function HomePage() {
         )}
       </main>
 
-      {/* ── Documentation Modal ── */}
+      {/* ── 5. Command Palette (⌘ K) Modal ── */}
+      {showCmdk && (
+        <div className="cmdk-backdrop" onClick={() => setShowCmdk(false)}>
+          <div className="cmdk-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="cmdk-input-row">
+              <span style={{ color: "var(--text-muted)", fontSize: "14px" }}>🔍</span>
+              <input
+                type="text"
+                className="cmdk-input"
+                placeholder="Search actions, samples, documentation... (Esc to close)"
+                autoFocus
+                value={cmdkSearch}
+                onChange={(e) => setCmdkSearch(e.target.value)}
+              />
+            </div>
+            <div className="cmdk-list">
+              <div
+                className="cmdk-item"
+                onClick={() => {
+                  setShowCmdk(false);
+                  fileInputRef.current?.click();
+                }}
+              >
+                <span>Upload Image from Device</span>
+                <span className="cmdk-item-badge">File</span>
+              </div>
+              <div
+                className="cmdk-item"
+                onClick={() => {
+                  setShowCmdk(false);
+                  handlePasteFromClipboard();
+                }}
+              >
+                <span>Paste Image from Clipboard</span>
+                <span className="cmdk-item-badge">Ctrl+V</span>
+              </div>
+
+              <div style={{ padding: "8px 12px 4px", fontSize: "10px", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                SAMPLE CASES
+              </div>
+              {filteredPresets.map((p) => (
+                <div
+                  key={p.id}
+                  className="cmdk-item"
+                  onClick={() => loadPreset(p)}
+                >
+                  <span>{p.name}</span>
+                  <span className="cmdk-item-badge">{p.category}</span>
+                </div>
+              ))}
+
+              <div style={{ padding: "8px 12px 4px", fontSize: "10px", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                DOCUMENTATION
+              </div>
+              <div
+                className="cmdk-item"
+                onClick={() => {
+                  setShowCmdk(false);
+                  setShowDocsModal(true);
+                }}
+              >
+                <span>Forensic Architecture & Methodology</span>
+                <span className="cmdk-item-badge">Docs</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 6. Documentation Modal ── */}
       {showDocsModal && (
         <div
           style={{
             position: "fixed",
             inset: 0,
             background: "rgba(0,0,0,0.8)",
-            backdropFilter: "blur(6px)",
+            backdropFilter: "blur(8px)",
             zIndex: 1000,
             display: "flex",
             alignItems: "center",
@@ -867,7 +1074,7 @@ export default function HomePage() {
               width: "100%",
               background: "var(--bg-surface)",
               border: "1px solid var(--border-hairline)",
-              borderRadius: "var(--radius-md)",
+              borderRadius: "var(--radius-lg)",
               padding: "24px",
               display: "flex",
               flexDirection: "column",
@@ -876,10 +1083,10 @@ export default function HomePage() {
             onClick={(e) => e.stopPropagation()}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <h2 style={{ fontSize: "16px", fontWeight: 700 }}>Forensic Architecture & Methodology</h2>
+              <h2 style={{ fontSize: "16px", fontWeight: 700, color: "var(--text-primary)" }}>Forensic Architecture & Methodology</h2>
               <button
                 type="button"
-                className="btn-secondary"
+                className="btn-secondary-workstation"
                 onClick={() => setShowDocsModal(false)}
                 style={{ padding: "4px 8px" }}
               >
@@ -888,33 +1095,46 @@ export default function HomePage() {
             </div>
             <div style={{ fontSize: "13px", color: "var(--text-secondary)", lineHeight: 1.6, display: "flex", flexDirection: "column", gap: "12px" }}>
               <p>
-                <strong>AI Detect</strong> by Synthrex operates entirely inside the browser utilizing WebAssembly and client-side Float32Array tensors for maximum privacy and zero latency.
+                <strong>AI Detect</strong> by Synthrex operates 100% inside client memory using browser Float32Array tensors, guaranteeing strict cryptographic privacy with zero server uploads.
               </p>
               <p>
-                <strong>1. PRNU Sensor Shot Noise:</strong> Real digital cameras exhibit physical silicon sensor pattern noise. Diffusion models generate synthetic imagery lacking this stochastic noise profile.
+                <strong>1. PRNU Sensor Noise:</strong> Silicon camera sensors impart a deterministic pattern noise across real captures. Diffusion networks lack this stochastic noise profile.
               </p>
               <p>
-                <strong>2. Chromatic Anomaly Field:</strong> Inpainted elements often diverge from the global color temperature and illuminance field of the original capture.
+                <strong>2. Chromatic Anomaly Field:</strong> Inpainted elements diverge in localized color temperature from global illumination.
               </p>
               <p>
-                <strong>3. Achromatic Inpainting:</strong> Specialized detection for text replacement and inpainting on white/light backgrounds (such as modified UI screenshots or documents).
+                <strong>3. Achromatic Inpainting:</strong> Detects synthetic diffusion halos on desaturated surfaces (such as edited UI modals or text replacements).
               </p>
               <p>
-                <strong>4. Error Level Analysis (ELA):</strong> Discloses discrepancies in compression quantization matrices across the image plane.
+                <strong>4. Error Level Analysis (ELA):</strong> Identifies mismatches in JPEG 8x8 DCT quantization tables.
               </p>
             </div>
           </div>
         </div>
       )}
 
-      {/* ── Professional Footer ── */}
+      {/* ── 7. Minimal Professional Footer ── */}
       <footer className="app-footer">
-        <div className="footer-inner">
+        <div className="footer-inner-content">
           <div>
-            <strong>AI Detect</strong> &middot; Synthrex Technologies &middot; Precision Pixel Forensics
+            <strong>AI Detect</strong> &middot; Client-side image forensics &middot; <em>Built for evidence, not assumptions.</em>
           </div>
-          <div>
-            Hosted at <a href="https://aidetector.synthrex.in" className="footer-link" target="_blank" rel="noreferrer">aidetector.synthrex.in</a> &middot; 100% Client-Side Private
+          <div className="footer-links-group">
+            <button
+              type="button"
+              className="footer-link-item"
+              onClick={() => setShowDocsModal(true)}
+              style={{ background: "none", border: "none", cursor: "pointer", font: "inherit" }}
+            >
+              Documentation
+            </button>
+            <a href="https://github.com/gauravbatule/pixel-level-ai-detector" className="footer-link-item" target="_blank" rel="noreferrer">
+              GitHub
+            </a>
+            <a href="https://aidetector.synthrex.in" className="footer-link-item" target="_blank" rel="noreferrer">
+              aidetector.synthrex.in
+            </a>
           </div>
         </div>
       </footer>
