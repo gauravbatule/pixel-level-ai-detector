@@ -1,187 +1,465 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { performELA } from "../lib/analysis/ela";
+import { SAMPLE_PRESETS, generateAuthenticSample, generateInpaintedSample, generateFullAISample } from "../lib/dataset/samples";
+import { performPixelForensics } from "../lib/analysis/pixelForensics";
 import { performNoiseAnalysis } from "../lib/analysis/noise";
-import { performFrequencyAnalysis } from "../lib/analysis/frequency";
-import { performCloneDetection } from "../lib/analysis/clone";
-import { performMetadataAnalysis } from "../lib/analysis/metadata";
+import { performELA } from "../lib/analysis/ela";
 import { computeCompositeScore, generateCompositeHeatmap } from "../lib/analysis/scoring";
+import { performMetadataAnalysis } from "../lib/analysis/metadata";
 
-const STEPS = [
-  "Error Level Analysis",
-  "Noise Patterns",
-  "Frequency Domain",
-  "Clone Detection",
-  "Metadata Scan",
-  "Scoring",
+const PIPELINE_STEPS = [
+  "Deep Spatial Matrix Loading",
+  "PRNU Sensor Shot Noise (Laplacian 3x3 + Box 9x9)",
+  "Chromatic & Illuminant Field Discrepancy",
+  "Splice Boundary & Edge Gradient Discontinuity",
+  "Error Level Analysis (JPEG Quantization Residuals)",
+  "Edge-Guided Bilateral Contour Snapping",
+  "Bento Telemetry & Pixel Mask Generation",
 ];
 
 export default function HomePage() {
-  const [state, setState] = useState("idle");
+  const [state, setState] = useState("idle"); // idle | analyzing | results
   const [file, setFile] = useState(null);
   const [imageUrl, setImageUrl] = useState(null);
   const [dragOver, setDragOver] = useState(false);
-  const [step, setStep] = useState(0);
+  const [stepIndex, setStepIndex] = useState(0);
   const [results, setResults] = useState(null);
-  const [maskOn, setMaskOn] = useState(true);
-  const [opacity, setOpacity] = useState(0.55);
+  const [errorMsg, setErrorMsg] = useState(null);
 
-  const inputRef = useRef(null);
-  const mainRef = useRef(null);
-  const overlayRef = useRef(null);
+  // Viewport Settings
+  const [maskVisible, setMaskVisible] = useState(true);
+  const [opacity, setOpacity] = useState(0.75);
+  const [viewMode, setViewMode] = useState("composite"); // composite | contour | noise | ela
+  const [splitSliderOn, setSplitSliderOn] = useState(false);
+  const [sliderPos, setSliderPos] = useState(50);
 
-  const onFile = useCallback((f) => {
+  // Live Hover HUD
+  const [hoverData, setHoverData] = useState(null);
+  const [activePreset, setActivePreset] = useState(null);
+
+  const fileInputRef = useRef(null);
+  const mainCanvasRef = useRef(null);
+  const overlayCanvasRef = useRef(null);
+  const stageRef = useRef(null);
+
+  // Handle Drag & Drop / File selection
+  const handleFileSelect = useCallback((f) => {
     if (!f || !f.type.startsWith("image/")) return;
-    if (f.size > 20 * 1024 * 1024) { alert("Max 20 MB"); return; }
+    if (f.size > 40 * 1024 * 1024) { alert("File exceeds 40 MB threshold"); return; }
+    setActivePreset(null);
+    setErrorMsg(null);
     setFile(f);
     setImageUrl(URL.createObjectURL(f));
     setState("analyzing");
-    setStep(0);
-    setMaskOn(true);
+    setStepIndex(0);
+    setMaskVisible(true);
+    setViewMode("composite");
   }, []);
 
-  const reset = () => {
-    setState("idle"); setFile(null); setImageUrl(null);
-    setResults(null); setStep(0); setMaskOn(true); setOpacity(0.55);
+  // Load Verified Benchmark Presets
+  const loadPreset = async (preset) => {
+    setErrorMsg(null);
+    if (preset.id === 'user_desert_path') {
+      try {
+        const res = await fetch('/sand_path_road_red.png');
+        const blob = await res.blob();
+        const f = new File([blob], 'sand_path_road_red.png', { type: 'image/png' });
+        setActivePreset(preset);
+        setFile(f);
+        setImageUrl('/sand_path_road_red.png');
+        setState("analyzing");
+        setStepIndex(0);
+        setMaskVisible(true);
+        setViewMode("composite");
+      } catch (err) {
+        console.error(err);
+      }
+      return;
+    }
+
+    let canvas, meta = null;
+    if (preset.id === 'inpainting_edit' || preset.id === 'screenshot_edit') {
+      const isScreenshot = preset.id === 'screenshot_edit';
+      const sample = generateInpaintedSample(800, 500, isScreenshot);
+      canvas = sample.editCanvas;
+      meta = sample.metadata;
+    } else if (preset.id === 'authentic_photo') {
+      canvas = generateAuthenticSample(800, 500);
+      meta = { type: 'authentic', title: 'Authentic Photo Control' };
+    } else {
+      const sample = generateFullAISample(800, 500);
+      canvas = sample.canvas;
+      meta = sample.metadata;
+    }
+
+    canvas.toBlob((blob) => {
+      const f = new File([blob], `${preset.id}.png`, { type: 'image/png' });
+      setActivePreset(preset);
+      setFile(f);
+      setImageUrl(canvas.toDataURL());
+      setState("analyzing");
+      setStepIndex(0);
+      setMaskVisible(true);
+      setViewMode("composite");
+    });
   };
 
-  // Pipeline
+  const resetSession = () => {
+    setState("idle");
+    setFile(null);
+    setImageUrl(null);
+    setResults(null);
+    setStepIndex(0);
+    setMaskVisible(true);
+    setOpacity(0.75);
+    setSplitSliderOn(false);
+    setActivePreset(null);
+    setErrorMsg(null);
+    setHoverData(null);
+  };
+
+  // Pipeline Runner (Pure Client-Side / Vercel-Ready Forensics)
   useEffect(() => {
-    if (state !== "analyzing" || !imageUrl) return;
-    let stop = false;
-    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    if (state !== "analyzing" || !file || !imageUrl) return;
+    let isCancelled = false;
+
+    const timer = setInterval(() => {
+      setStepIndex((curr) => (curr < PIPELINE_STEPS.length - 1 ? curr + 1 : curr));
+    }, 240);
 
     (async () => {
-      const img = new Image();
-      img.src = imageUrl;
-      await new Promise((r) => { img.onload = r; });
-      let w = img.width, h = img.height;
-      if (Math.max(w, h) > 1200) {
-        const s = 1200 / Math.max(w, h);
-        w = Math.round(w * s); h = Math.round(h * s);
+      try {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.src = imageUrl;
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = () => reject(new Error("Image failed to load in DOM"));
+        });
+
+        if (isCancelled) return;
+
+        const maxDimension = 1920;
+        let w = img.naturalWidth || img.width;
+        let h = img.naturalHeight || img.height;
+        let scale = 1.0;
+        if (Math.max(w, h) > maxDimension) {
+          scale = maxDimension / Math.max(w, h);
+          w = Math.round(w * scale);
+          h = Math.round(h * scale);
+        }
+
+        const procCanvas = document.createElement("canvas");
+        procCanvas.width = w;
+        procCanvas.height = h;
+        const pctx = procCanvas.getContext("2d", { willReadFrequently: true });
+        pctx.drawImage(img, 0, 0, w, h);
+        const imgData = pctx.getImageData(0, 0, w, h);
+
+        const isLossless = file.type === "image/png" || file.type === "image/webp";
+
+        // Execute Multi-Spectral Modules
+        const pixelForensics = performPixelForensics(imgData, w, h, isLossless);
+        const noiseAnalysis = performNoiseAnalysis(imgData, w, h);
+        const elaAnalysis = await performELA(imgData, w, h, 0.90, 20, file.type);
+        const metadataResult = await performMetadataAnalysis(file, imgData, w, h);
+
+        // Composite Fusion Score
+        const scoreResult = computeCompositeScore(
+          elaAnalysis,
+          noiseAnalysis,
+          null,
+          null,
+          metadataResult,
+          pixelForensics
+        );
+
+        // Heatmap & Glowing Contour Generator
+        const heatmapResult = generateCompositeHeatmap(
+          w,
+          h,
+          elaAnalysis,
+          noiseAnalysis,
+          null,
+          null,
+          pixelForensics
+        );
+
+        if (isCancelled) return;
+
+        clearInterval(timer);
+        setStepIndex(PIPELINE_STEPS.length - 1);
+
+        setResults({
+          ...scoreResult,
+          width: w,
+          height: h,
+          sourceImage: img,
+          imageData: imgData,
+          pixelForensics,
+          noiseAnalysis,
+          elaAnalysis,
+          heatmapImageData: heatmapResult.heatmapImageData,
+          contourImageData: heatmapResult.contourImageData,
+          pixelSuspicionMap: heatmapResult.pixelSuspicionMap,
+          fileSize: (file.size / (1024 * 1024)).toFixed(2) + " MB",
+          dimensions: `${w} × ${h}`,
+        });
+
+        setState("results");
+      } catch (err) {
+        if (!isCancelled) {
+          clearInterval(timer);
+          setErrorMsg(err.message);
+          setState("idle");
+        }
       }
-      const c = document.createElement("canvas");
-      c.width = w; c.height = h;
-      const cx = c.getContext("2d");
-      cx.drawImage(img, 0, 0, w, h);
-      const data = cx.getImageData(0, 0, w, h);
-      if (stop) return;
-
-      setStep(0); await wait(120);
-      const ela = await performELA(data, w, h, 0.9, 20, file?.type);
-      if (stop) return;
-
-      setStep(1); await wait(60);
-      const noise = performNoiseAnalysis(data, w, h);
-      if (stop) return;
-
-      setStep(2); await wait(60);
-      const freq = performFrequencyAnalysis(data, w, h);
-      if (stop) return;
-
-      setStep(3); await wait(60);
-      const clone = performCloneDetection(data, w, h);
-      if (stop) return;
-
-      setStep(4); await wait(60);
-      const meta = await performMetadataAnalysis(file, data, w, h);
-      if (stop) return;
-
-      setStep(5); await wait(120);
-      const score = computeCompositeScore(ela, noise, freq, clone, meta);
-      const heatmap = generateCompositeHeatmap(w, h, ela, noise, freq, clone);
-      if (stop) return;
-
-      setResults({ width: w, height: h, imageData: data, ela, noise, freq, clone, meta, score, heatmap });
-      setState("results");
     })();
-    return () => { stop = true; };
-  }, [state, imageUrl, file]);
 
-  // Canvas draw
+    return () => {
+      isCancelled = true;
+      clearInterval(timer);
+    };
+  }, [state, file, imageUrl]);
+
+  // Canvas Viewport Renderer
   useEffect(() => {
-    if (!results) return;
-    const mc = mainRef.current, oc = overlayRef.current;
+    if (!results || state !== "results") return;
+    const mc = mainCanvasRef.current;
+    const oc = overlayCanvasRef.current;
     if (!mc || !oc) return;
-    const { width: w, height: h } = results;
-    mc.width = w; mc.height = h;
-    oc.width = w; oc.height = h;
-    mc.getContext("2d").putImageData(results.imageData, 0, 0);
-    const ctx = oc.getContext("2d");
-    ctx.clearRect(0, 0, w, h);
-    if (maskOn && results.heatmap) {
-      const tmp = document.createElement("canvas");
-      tmp.width = w; tmp.height = h;
-      tmp.getContext("2d").putImageData(results.heatmap, 0, 0);
-      ctx.globalAlpha = opacity;
-      ctx.drawImage(tmp, 0, 0);
-      ctx.globalAlpha = 1;
-    }
-  }, [results, maskOn, opacity]);
 
-  const sc = results?.score;
-  const pct = sc?.overallScore ?? 0;
-  const circ = 2 * Math.PI * 40;
+    const { width: w, height: h, sourceImage, heatmapImageData, contourImageData, noiseAnalysis, elaAnalysis } = results;
+
+    mc.width = w;
+    mc.height = h;
+    oc.width = w;
+    oc.height = h;
+
+    const mctx = mc.getContext("2d");
+    mctx.drawImage(sourceImage, 0, 0, w, h);
+
+    const octx = oc.getContext("2d");
+    octx.clearRect(0, 0, w, h);
+
+    if (maskVisible) {
+      // Pick Overlay Buffer based on Active View Mode
+      let targetImageData;
+      if (viewMode === "contour") {
+        targetImageData = contourImageData;
+      } else if (viewMode === "noise") {
+        targetImageData = noiseAnalysis.noiseHeatmap;
+      } else if (viewMode === "ela") {
+        targetImageData = elaAnalysis.heatmapData;
+      } else {
+        targetImageData = heatmapImageData; // composite
+      }
+
+      // Render Overlay Buffer to temp canvas for alpha blending & split clipping
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = w;
+      tempCanvas.height = h;
+      tempCanvas.getContext("2d").putImageData(targetImageData, 0, 0);
+
+      octx.save();
+      if (splitSliderOn) {
+        const splitX = (sliderPos / 100) * w;
+        octx.beginPath();
+        octx.rect(0, 0, splitX, h);
+        octx.clip();
+      }
+
+      octx.globalAlpha = opacity;
+      octx.drawImage(tempCanvas, 0, 0, w, h);
+      octx.restore();
+
+      if (splitSliderOn) {
+        const splitX = (sliderPos / 100) * w;
+        octx.strokeStyle = "#ffffff";
+        octx.lineWidth = 2;
+        octx.beginPath();
+        octx.moveTo(splitX, 0);
+        octx.lineTo(splitX, h);
+        octx.stroke();
+      }
+    }
+  }, [results, state, maskVisible, opacity, viewMode, splitSliderOn, sliderPos]);
+
+  // Handle Mouse Hover Pixel Inspector HUD
+  const handleMouseMoveOnCanvas = (e) => {
+    if (!results || !mainCanvasRef.current) return;
+    const canvas = mainCanvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+
+    const px = Math.floor((e.clientX - rect.left) * scaleX);
+    const py = Math.floor((e.clientY - rect.top) * scaleY);
+
+    if (px < 0 || px >= canvas.width || py < 0 || py >= canvas.height) {
+      setHoverData(null);
+      return;
+    }
+
+    const idx = py * canvas.width + px;
+    const pixData = results.imageData.data;
+    const r = pixData[idx * 4];
+    const g = pixData[idx * 4 + 1];
+    const b = pixData[idx * 4 + 2];
+
+    const aiProb = results.pixelSuspicionMap ? Math.round(results.pixelSuspicionMap[idx] * 100) : 0;
+    const noiseVar = results.pixelForensics?.localNoiseVar ? results.pixelForensics.localNoiseVar[idx].toFixed(1) : "0.0";
+    const seamVal = results.pixelForensics?.spliceMap ? Math.round(results.pixelForensics.spliceMap[idx] * 100) : 0;
+
+    setHoverData({
+      x: px,
+      y: py,
+      r, g, b,
+      aiProb,
+      noiseVar,
+      seamVal,
+      clientX: e.clientX,
+      clientY: e.clientY,
+    });
+  };
+
+  const handleMouseLeaveCanvas = () => {
+    setHoverData(null);
+  };
+
+  const scorePct = results?.overallScore ?? 0;
+  const radius = 38;
+  const circumference = 2 * Math.PI * radius;
 
   return (
     <div className="shell">
-      {/* Nav */}
-      <nav className="nav">
-        <button className="nav-logo" onClick={reset} type="button">
-          AI Pixel Detector
-        </button>
-        <div className="nav-r">
-          {state === "results" && (
-            <button className="nav-btn" onClick={reset} type="button">New Analysis</button>
-          )}
-          <span className="nav-tag">Runs locally</span>
-        </div>
-      </nav>
+      {/* ── Swiss Nav Header ── */}
+      <header className="nav-header">
+        <div className="nav-inner">
+          <button className="brand" onClick={resetSession} type="button">
+            <div className="brand-symbol">PX</div>
+            <div className="brand-text">
+              <span className="brand-title">AI Pixel Detector</span>
+              <span className="brand-sub">Swiss Forensic Engine // v2.4</span>
+            </div>
+          </button>
 
-      <main className="main">
-        {/* ── IDLE ── */}
+          <div className="nav-telemetry">
+            <div className="status-indicator">
+              <span className="status-dot" />
+              <span>Vercel Edge Ready</span>
+            </div>
+            {state === "results" && (
+              <button className="btn-ghost" onClick={resetSession} type="button">
+                + New Analysis
+              </button>
+            )}
+          </div>
+        </div>
+      </header>
+
+      <main className="main-container">
+        {errorMsg && (
+          <div style={{ padding: "14px", background: "rgba(239, 68, 68, 0.1)", border: "1px solid var(--signal-red-border)", borderRadius: "6px", color: "var(--signal-red)", margin: "20px 0" }}>
+            {errorMsg}
+          </div>
+        )}
+
+        {/* ── 1. IDLE STATE (Swiss Bento Hero) ── */}
         {state === "idle" && (
-          <div className="idle">
-            <h1 className="title">Detect AI-edited pixels in any image</h1>
-            <p className="desc">
-              Upload a photo. Regions edited with AI are marked in
-              <span className="cr"> red</span>, authentic areas in
-              <span className="cg"> green</span>.
+          <div className="idle-hero">
+            <div className="hero-badge">
+              <span>● MULTI-SPECTRAL SENSOR FORENSICS</span>
+            </div>
+            <h1 className="hero-heading">Pixel-Level AI Forensic & Inpainting Detector</h1>
+            <p className="hero-subtitle">
+              Calculates PRNU sensor noise variance, chromatic illuminant vectors, and splice boundary gradients to isolate AI inpainting down to exact pixels.
             </p>
 
+            {/* Swiss Dropzone */}
             <div
-              className={`drop ${dragOver ? "drop-on" : ""}`}
-              onDrop={(e) => { e.preventDefault(); setDragOver(false); onFile(e.dataTransfer.files[0]); }}
+              className={`swiss-dropzone ${dragOver ? "active" : ""}`}
+              onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFileSelect(e.dataTransfer.files[0]); }}
               onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
               onDragLeave={() => setDragOver(false)}
-              onClick={() => inputRef.current?.click()}
+              onClick={() => fileInputRef.current?.click()}
             >
-              <span className="drop-plus">+</span>
-              <span className="drop-txt">Drop image here or click to browse</span>
-              <span className="drop-sub">JPEG, PNG, WebP &middot; Max 20 MB</span>
-              <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={(e) => onFile(e.target.files[0])} />
+              <div className="drop-icon-box">+</div>
+              <p className="drop-headline">Drop image or screenshot to analyze</p>
+              <p className="drop-meta">Supports UHD JPEG, PNG Screenshots, WebP &middot; 100% In-Browser Private</p>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                hidden
+                onChange={(e) => handleFileSelect(e.target.files[0])}
+              />
             </div>
 
-            <div className="engines">
-              {["Error Level", "Noise Analysis", "Frequency Domain", "Clone Detection", "Metadata + C2PA"].map((t) => (
-                <span key={t}>{t}</span>
+            {/* Bento Sample Repository */}
+            <div className="bento-section">
+              <div className="section-label">
+                <span>Verified Diagnostic Presets</span>
+              </div>
+              <div className="bento-sample-grid">
+                {SAMPLE_PRESETS.map((preset) => (
+                  <div key={preset.id} className="bento-card" onClick={() => loadPreset(preset)}>
+                    <div className="bento-card-header">
+                      <span className={`bento-tag ${preset.id === 'user_desert_path' ? 'tag-user' : ''}`}>
+                        {preset.tag}
+                      </span>
+                      <span className="bento-arrow">↗</span>
+                    </div>
+                    <h3 className="bento-name">{preset.name}</h3>
+                    <p className="bento-desc">{preset.description}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Diagnostic Capability Chips */}
+            <div className="capability-bar">
+              {[
+                "PRNU High-Pass Shot Noise",
+                "Color Vector Inconsistency",
+                "Splice Boundary Discontinuity",
+                "Guided Bilateral Contours",
+                "Error Level Analysis (ELA)",
+                "Screenshot Invariance",
+              ].map((cap) => (
+                <span key={cap} className="cap-chip">{cap}</span>
               ))}
             </div>
           </div>
         )}
 
-        {/* ── ANALYZING ── */}
+        {/* ── 2. ANALYZING SCANNER VIEW ── */}
         {state === "analyzing" && (
-          <div className="scanning">
-            <div className="scan-box">
-              <p className="scan-title">Analyzing image...</p>
-              <div className="scan-bar"><div className="scan-fill" style={{ width: `${((step + 1) / STEPS.length) * 100}%` }} /></div>
-              <div className="scan-steps">
-                {STEPS.map((s, i) => (
-                  <div key={i} className={`scan-step ${i < step ? "done" : i === step ? "now" : ""}`}>
-                    <span className="scan-num">{i < step ? "✓" : i + 1}</span>
-                    {s}
+          <div className="scan-container">
+            <div className="scan-card">
+              <div className="scan-header">
+                <span className="scan-title">Running Multi-Spectral Forensic Matrix</span>
+                <span className="scan-pulse">PROCESSING</span>
+              </div>
+
+              <div className="scan-progress-track">
+                <div
+                  className="scan-progress-fill"
+                  style={{ width: `${((stepIndex + 1) / PIPELINE_STEPS.length) * 100}%` }}
+                />
+              </div>
+
+              <div className="scan-pipeline-steps">
+                {PIPELINE_STEPS.map((s, idx) => (
+                  <div
+                    key={idx}
+                    className={`pipeline-step ${idx < stepIndex ? "completed" : idx === stepIndex ? "active" : ""}`}
+                  >
+                    <div className="step-indicator">
+                      {idx < stepIndex ? "✓" : idx + 1}
+                    </div>
+                    <span>{s}</span>
                   </div>
                 ))}
               </div>
@@ -189,128 +467,297 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* ── RESULTS ── */}
+        {/* ── 3. RESULTS BENTO DASHBOARD ── */}
         {state === "results" && results && (
-          <div className="result">
-            {/* Score row */}
-            <div className={`score-row ${pct >= 65 ? "sr-red" : pct >= 35 ? "sr-amber" : "sr-green"}`}>
-              <div className="ring-box">
-                <svg viewBox="0 0 92 92" width="92" height="92">
-                  <circle cx="46" cy="46" r="40" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="5" />
-                  <circle cx="46" cy="46" r="40" fill="none"
-                    stroke={pct >= 65 ? "#ef4444" : pct >= 35 ? "#f59e0b" : "#22c55e"}
-                    strokeWidth="5" strokeLinecap="round"
-                    strokeDasharray={circ} strokeDashoffset={circ - (pct / 100) * circ}
-                    transform="rotate(-90 46 46)" className="ring-arc" />
-                </svg>
-                <span className="ring-num">{pct}<small>%</small></span>
+          <div className="results-dashboard">
+            {/* Top Telemetry Strip */}
+            <div className="telemetry-strip">
+              <div className="telemetry-items">
+                <div>DIMENSIONS: <span className="telemetry-val">{results.dimensions}</span></div>
+                <div>PAYLOAD: <span className="telemetry-val">{results.fileSize}</span></div>
+                <div>PIXELS: <span className="telemetry-val">{(results.width * results.height).toLocaleString()}</span></div>
+              </div>
+              <div className="telemetry-items">
+                <div>ENGINE: <span className="telemetry-val" style={{ color: "var(--signal-blue)" }}>CLIENT JS V2.4</span></div>
+              </div>
+            </div>
+
+            {/* Viewport Control Bar */}
+            <div className="viewport-controls-bar">
+              <div className="mode-pills">
+                <button
+                  type="button"
+                  className={`mode-pill ${viewMode === "composite" ? "active" : ""}`}
+                  onClick={() => setViewMode("composite")}
+                >
+                  Composite Heatmap
+                </button>
+                <button
+                  type="button"
+                  className={`mode-pill ${viewMode === "contour" ? "active" : ""}`}
+                  onClick={() => setViewMode("contour")}
+                >
+                  Pixel Contours
+                </button>
+                <button
+                  type="button"
+                  className={`mode-pill ${viewMode === "noise" ? "active" : ""}`}
+                  onClick={() => setViewMode("noise")}
+                >
+                  PRNU Residuals
+                </button>
+                <button
+                  type="button"
+                  className={`mode-pill ${viewMode === "ela" ? "active" : ""}`}
+                  onClick={() => setViewMode("ela")}
+                >
+                  High-Res ELA
+                </button>
               </div>
 
-              <div className="score-label">
-                <span className={`verdict ${pct >= 65 ? "vr" : pct >= 35 ? "va" : "vg"}`}>
-                  {pct >= 65 ? "Edited with AI" : pct >= 35 ? "Possibly AI-Modified" : "Likely Authentic"}
-                </span>
-                <span className="conf">Confidence: {sc.confidence}</span>
-                {results.meta?.stats.aiToolsDetected?.length > 0 && (
-                  <span className="tools-found">Detected: {results.meta.stats.aiToolsDetected.join(", ")}</span>
-                )}
-                {results.meta?.stats.hasC2PA && (
-                  <span className="c2pa-found">C2PA provenance data found</span>
-                )}
-              </div>
+              <div className="viewport-toggles">
+                <label className="swiss-switch">
+                  <input
+                    type="checkbox"
+                    checked={splitSliderOn}
+                    onChange={(e) => setSplitSliderOn(e.target.checked)}
+                  />
+                  <span className="switch-track"><span className="switch-thumb" /></span>
+                  Split Slider
+                </label>
 
-              <div className="bars">
-                {Object.values(sc.breakdown).map((b) => (
-                  <div className="brow" key={b.label}>
-                    <span className="blbl">{b.label}</span>
-                    <div className="btrack"><div className={`bfill ${b.score >= 65 ? "bf-r" : b.score >= 35 ? "bf-a" : "bf-g"}`} style={{ width: `${b.score}%` }} /></div>
-                    <span className="bval">{b.score}</span>
+                <label className="swiss-switch">
+                  <input
+                    type="checkbox"
+                    checked={maskVisible}
+                    onChange={(e) => setMaskVisible(e.target.checked)}
+                  />
+                  <span className="switch-track"><span className="switch-thumb" /></span>
+                  Diagnostic Mask
+                </label>
+
+                {maskVisible && (
+                  <div className="opacity-slider-wrap">
+                    <span>Opacity</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={opacity}
+                      onChange={(e) => setOpacity(+e.target.value)}
+                    />
+                    <span>{Math.round(opacity * 100)}%</span>
                   </div>
-                ))}
-              </div>
-
-              <div className="score-btns">
-                <button className="sbtn" onClick={() => exportJSON(results)} type="button">Export JSON</button>
-                <button className="sbtn" onClick={() => saveOverlay(overlayRef.current)} type="button">Save Overlay</button>
+                )}
               </div>
             </div>
 
-            {/* Controls */}
-            <div className="controls">
-              <span className="leg"><span className="swatch sr" /> AI-Edited</span>
-              <span className="leg"><span className="swatch sg" /> Authentic</span>
+            {/* Hairline Comparison Slider Bar */}
+            {splitSliderOn && (
+              <div className="split-slider-hairline">
+                <span>Drag to compare Original Photo (Right) vs AI Detection Mask (Left):</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={sliderPos}
+                  onChange={(e) => setSliderPos(+e.target.value)}
+                  className="split-slider-input"
+                />
+                <span>{sliderPos}%</span>
+              </div>
+            )}
 
-              <label className="tog">
-                <input type="checkbox" checked={maskOn} onChange={(e) => setMaskOn(e.target.checked)} />
-                <span className="tog-sw"><span className="tog-dot" /></span>
-                AI Mask
-              </label>
-
-              {maskOn && (
-                <span className="opa">
-                  <input type="range" min="0" max="1" step="0.05" value={opacity} onChange={(e) => setOpacity(+e.target.value)} />
-                  <span className="opa-v">{Math.round(opacity * 100)}%</span>
-                </span>
-              )}
-            </div>
-
-            {/* Image */}
-            <div className="viewer">
-              <div className="cv-wrap">
-                <canvas ref={mainRef} />
-                <canvas ref={overlayRef} className="cv-over" />
+            {/* Visualizer Canvas Viewport */}
+            <div className="visualizer-viewport" ref={stageRef}>
+              <div
+                className="canvas-stage"
+                onMouseMove={handleMouseMoveOnCanvas}
+                onMouseLeave={handleMouseLeaveCanvas}
+              >
+                <canvas ref={mainCanvasRef} />
+                <canvas ref={overlayCanvasRef} className="overlay-canvas" />
               </div>
             </div>
 
-            {/* Metadata */}
-            {results.meta?.findings?.length > 0 && (
-              <details className="meta-card">
-                <summary className="meta-sum">Metadata findings</summary>
-                <div className="meta-info">
-                  <span>{results.meta.stats.fileFormat}</span>
-                  <span>{results.meta.stats.dimensions}</span>
-                  <span>{(results.meta.stats.fileSize / 1024).toFixed(0)} KB</span>
-                  <span>EXIF: {results.meta.stats.exifPresent ? "Yes" : "No"}</span>
+            {/* Live Hover Pixel Inspector HUD */}
+            {hoverData && (
+              <div
+                className="inspector-hud"
+                style={{
+                  left: `${Math.min(window.innerWidth - 240, hoverData.clientX + 16)}px`,
+                  top: `${Math.min(window.innerHeight - 180, hoverData.clientY + 16)}px`,
+                }}
+              >
+                <div className="hud-top">
+                  <span className="hud-coords">X:{hoverData.x} Y:{hoverData.y}</span>
+                  <span className={`hud-pill ${hoverData.aiProb >= 42 ? "ai" : "auth"}`}>
+                    {hoverData.aiProb >= 42 ? "AI ANOMALY" : "AUTHENTIC"}
+                  </span>
                 </div>
-                <div className="meta-list">
-                  {results.meta.findings.map((f, i) => (
-                    <div key={i} className={`mf mf-${f.type}`}>{f.message}</div>
+                <div className="hud-data">
+                  <div className="hud-metric-row">
+                    <span>AI Probability</span>
+                    <span className="val" style={{ color: hoverData.aiProb >= 42 ? "var(--signal-red)" : "var(--signal-green)" }}>
+                      {hoverData.aiProb}%
+                    </span>
+                  </div>
+                  <div className="hud-metric-row">
+                    <span>RGB Value</span>
+                    <span className="val">({hoverData.r}, {hoverData.g}, {hoverData.b})</span>
+                  </div>
+                  <div className="hud-metric-row">
+                    <span>Noise Var (σ²)</span>
+                    <span className="val">{hoverData.noiseVar}</span>
+                  </div>
+                  <div className="hud-metric-row">
+                    <span>Seam Gradient</span>
+                    <span className="val">{hoverData.seamVal}%</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── Bento Telemetry Grid ── */}
+            <div className="bento-telemetry-grid">
+              {/* Cell 1: Overall Verdict */}
+              <div className="bento-cell cell-verdict">
+                <div className="section-label">
+                  <span>Forensic Verdict</span>
+                </div>
+                <div className="verdict-gauge-wrap">
+                  <div className="gauge-svg-box">
+                    <svg viewBox="0 0 88 88" width="88" height="88">
+                      <circle cx="44" cy="44" r={radius} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="5" />
+                      <circle
+                        cx="44" cy="44" r={radius} fill="none"
+                        stroke={scorePct >= 60 ? "var(--signal-red)" : scorePct >= 30 ? "var(--signal-amber)" : "var(--signal-green)"}
+                        strokeWidth="5"
+                        strokeLinecap="round"
+                        strokeDasharray={circumference}
+                        strokeDashoffset={circumference - (scorePct / 100) * circumference}
+                        transform="rotate(-90 44 44)"
+                        style={{ transition: "stroke-dashoffset 1s cubic-bezier(0.16, 1, 0.3, 1)" }}
+                      />
+                    </svg>
+                    <span className="gauge-number">{scorePct}%</span>
+                  </div>
+
+                  <div className="verdict-content">
+                    <span className={`verdict-badge ${scorePct >= 60 ? "v-red" : scorePct >= 30 ? "v-amber" : "v-green"}`}>
+                      {scorePct >= 60 ? "AI Inpainted / Altered" : scorePct >= 30 ? "Likely AI-Modified" : "Likely Authentic Camera"}
+                    </span>
+                    <span className="verdict-meta">Confidence Index: {results.confidence}</span>
+                    {results.editedAreaPercent > 0 && (
+                      <span className="area-callout">
+                        Detected Inpainting Area: <strong>{results.editedAreaPercent}%</strong>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Cell 2: Multi-Spectral Signal Breakdown */}
+              <div className="bento-cell cell-breakdown">
+                <div className="section-label">
+                  <span>Multi-Spectral Signal Matrix</span>
+                </div>
+                <div className="signal-rows">
+                  {results.breakdown && Object.values(results.breakdown).map((b) => (
+                    <div className="signal-row" key={b.label}>
+                      <span className="signal-name">{b.label}</span>
+                      <div className="signal-track">
+                        <div
+                          className={`signal-fill ${b.score >= 60 ? "f-red" : b.score >= 30 ? "f-amber" : "f-green"}`}
+                          style={{ width: `${b.score}%` }}
+                        />
+                      </div>
+                      <span className="signal-val">{b.score}</span>
+                    </div>
                   ))}
                 </div>
-              </details>
-            )}
+              </div>
+
+              {/* Cell 3: Quantitative Geometry */}
+              <div className="bento-cell cell-metrics">
+                <div className="section-label">
+                  <span>Pixel Geometry Diagnostics</span>
+                </div>
+                <div className="geometry-grid">
+                  <div className="geom-stat">
+                    <span className="geom-lbl">Inpainted Area</span>
+                    <span className="geom-val" style={{ color: "var(--signal-red)" }}>{results.editedAreaPercent}%</span>
+                  </div>
+                  <div className="geom-stat">
+                    <span className="geom-lbl">Affected Pixels</span>
+                    <span className="geom-val">{results.pixelForensics?.stats?.editedPixelCount?.toLocaleString() || "0"}</span>
+                  </div>
+                  <div className="geom-stat">
+                    <span className="geom-lbl">Sensor Shot Noise</span>
+                    <span className="geom-val">{results.noiseAnalysis?.stats?.averageNoiseVariance ? results.noiseAnalysis.stats.averageNoiseVariance.toFixed(1) : "N/A"}</span>
+                  </div>
+                  <div className="geom-stat">
+                    <span className="geom-lbl">Bayer Demosaicing</span>
+                    <span className="geom-val" style={{ color: results.noiseAnalysis?.stats?.crossChannelScore < 0.2 ? "var(--signal-green)" : "var(--signal-amber)" }}>
+                      {results.noiseAnalysis?.stats?.crossChannelScore < 0.2 ? "Verified" : "Synthetic"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Cell 4: Action Suite */}
+              <div className="bento-cell cell-actions">
+                <div className="section-label">
+                  <span>Export Suite</span>
+                </div>
+                <div className="action-stack">
+                  <button className="swiss-btn btn-accent" onClick={() => downloadJSON(results)} type="button">
+                    ↓ Export JSON Dossier
+                  </button>
+                  <button className="swiss-btn" onClick={() => downloadCanvas(overlayCanvasRef.current, "ai-pixel-contour-mask.png")} type="button">
+                    ↓ Save Binary Alpha Mask
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </main>
 
-      <footer className="foot">
-        All analysis runs in your browser. No images are uploaded anywhere.
+      {/* ── Swiss Footer ── */}
+      <footer className="swiss-footer">
+        Swiss Forensic Instrumentation &middot; Client-Side Spatial Matrix &middot; Vercel Ready
       </footer>
     </div>
   );
 }
 
-function exportJSON(r) {
-  const d = {
+function downloadJSON(res) {
+  const dossier = {
+    system: "AI Pixel Detector - Swiss Forensic Engine v2.4",
     timestamp: new Date().toISOString(),
-    score: r.score.overallScore,
-    classification: r.score.classification,
-    confidence: r.score.confidence,
-    breakdown: r.score.breakdown,
-    dimensions: `${r.width}x${r.height}`,
-    metadata: r.meta?.stats,
+    overallScore: res.overallScore,
+    classification: res.classification,
+    confidence: res.confidence,
+    editedAreaPercent: res.editedAreaPercent,
+    dimensions: res.dimensions,
+    fileSize: res.fileSize,
+    breakdown: res.breakdown,
   };
-  const b = new Blob([JSON.stringify(d, null, 2)], { type: "application/json" });
-  dl(URL.createObjectURL(b), "ai-pixel-report.json");
+  const blob = new Blob([JSON.stringify(dossier, null, 2)], { type: "application/json" });
+  triggerDownload(URL.createObjectURL(blob), "forensic-pixel-dossier.json");
 }
 
-function saveOverlay(c) {
-  if (!c) return;
-  dl(c.toDataURL("image/png"), "ai-pixel-overlay.png");
+function downloadCanvas(canvas, filename) {
+  if (!canvas) return;
+  triggerDownload(canvas.toDataURL("image/png"), filename);
 }
 
-function dl(href, name) {
-  const a = document.createElement("a");
-  a.href = href; a.download = name; a.click();
-  if (href.startsWith("blob:")) URL.revokeObjectURL(href);
+function triggerDownload(url, filename) {
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  if (url.startsWith("blob:")) URL.revokeObjectURL(url);
 }
