@@ -26,6 +26,7 @@ export default function HomePage() {
   const [stepIndex, setStepIndex] = useState(0);
   const [results, setResults] = useState(null);
   const [errorMsg, setErrorMsg] = useState(null);
+  const [detectionMode, setDetectionMode] = useState("balanced"); // normal | balanced | strict
 
   // Modals & Navigation
   const [showDocsModal, setShowDocsModal] = useState(false);
@@ -266,6 +267,40 @@ export default function HomePage() {
     setErrorMsg(null);
   };
 
+  const handleModeChange = (newMode) => {
+    setDetectionMode(newMode);
+    if (state === "results" && results && results.imageData) {
+      const isLossless = file?.type === "image/png" || file?.type === "image/webp";
+      const pixelForensics = performPixelForensics(results.imageData, results.width, results.height, isLossless, newMode);
+      const scoreResult = computeCompositeScore(
+        results.elaAnalysis,
+        results.noiseAnalysis,
+        null,
+        null,
+        results.metadataAnalysis,
+        pixelForensics,
+        newMode
+      );
+      const heatmapResult = generateCompositeHeatmap(
+        results.width,
+        results.height,
+        results.elaAnalysis,
+        results.noiseAnalysis,
+        null,
+        null,
+        pixelForensics
+      );
+      setResults(prev => ({
+        ...prev,
+        ...scoreResult,
+        pixelForensics,
+        heatmapImageData: heatmapResult.heatmapImageData,
+        contourImageData: heatmapResult.contourImageData,
+        pixelSuspicionMap: heatmapResult.pixelSuspicionMap,
+      }));
+    }
+  };
+
   // Pipeline Execution
   useEffect(() => {
     if (state !== "analyzing" || !file || !imageUrl) return;
@@ -312,7 +347,7 @@ export default function HomePage() {
         const isLossless = file.type === "image/png" || file.type === "image/webp";
 
         // Multi-Spectral Forensic Modules
-        const pixelForensics = performPixelForensics(imgData, w, h, isLossless);
+        const pixelForensics = performPixelForensics(imgData, w, h, isLossless, detectionMode);
         const noiseAnalysis = performNoiseAnalysis(imgData, w, h);
         const elaAnalysis = await performELA(imgData, w, h, 0.90, 20, file.type);
         const metadataResult = await performMetadataAnalysis(file, imgData, w, h);
@@ -324,7 +359,8 @@ export default function HomePage() {
           null,
           null,
           metadataResult,
-          pixelForensics
+          pixelForensics,
+          detectionMode
         );
 
         // Heatmap & Glowing Contours
@@ -588,10 +624,6 @@ export default function HomePage() {
               <span className="cmdk-kbd">⌘K</span>
             </button>
 
-            <div className="privacy-pill">
-              <span>LOCAL PROCESSING · PRIVATE</span>
-            </div>
-
             {state === "results" && (
               <button
                 type="button"
@@ -647,6 +679,52 @@ export default function HomePage() {
                   />
                 </div>
               </div>
+            </div>
+
+            {/* Forensic Sensitivity Mode Selector & Strict Mode Warning */}
+            <div className="forensic-mode-container">
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "10px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: 700, letterSpacing: "0.06em", fontFamily: "var(--font-mono)" }}>
+                    SENSITIVITY:
+                  </span>
+                  <div className="forensic-mode-toggle-group">
+                    <button
+                      type="button"
+                      className={`forensic-mode-btn ${detectionMode === "normal" ? "active" : ""}`}
+                      onClick={() => handleModeChange("normal")}
+                    >
+                      <span>Normal</span>
+                      <span className="mode-badge">High Specificity</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`forensic-mode-btn ${detectionMode === "balanced" ? "active" : ""}`}
+                      onClick={() => handleModeChange("balanced")}
+                    >
+                      <span>Balanced</span>
+                      <span className="mode-badge">Recommended</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`forensic-mode-btn ${detectionMode === "strict" ? "active" : ""}`}
+                      onClick={() => handleModeChange("strict")}
+                    >
+                      <span>Strict</span>
+                      <span className="mode-badge">Deep Forensics</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {detectionMode === "strict" && (
+                <div className="strict-mode-warning-banner">
+                  <span className="strict-mode-warning-icon">⚠️</span>
+                  <span>
+                    <strong>Strict Mode Active:</strong> Maximizes sensitivity to subtle inpainting and micro-textures. In this mode, screenshots and compressed images may occasionally be flagged as partially manipulated or unsure.
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Signature Workstation Upload Zone */}
@@ -868,11 +946,45 @@ export default function HomePage() {
                 <div>SIZE: <span className="telemetry-strong-val">{results.fileSize}</span></div>
                 <div>PIXELS: <span className="telemetry-strong-val">{(results.width * results.height).toLocaleString()}</span></div>
               </div>
-              <div className="telemetry-meta-cluster">
-                <div>ENGINE: <span className="telemetry-strong-val">Client Forensics v2.5</span></div>
-                <div>HOST: <span className="telemetry-strong-val">aidetector.synthrex.in</span></div>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span style={{ fontSize: "10px", color: "var(--text-muted)", fontWeight: 700, fontFamily: "var(--font-mono)" }}>MODE:</span>
+                <div className="forensic-mode-toggle-group" style={{ margin: 0 }}>
+                  <button
+                    type="button"
+                    className={`forensic-mode-btn ${detectionMode === "normal" ? "active" : ""}`}
+                    onClick={() => handleModeChange("normal")}
+                    style={{ padding: "3px 8px", fontSize: "10px" }}
+                  >
+                    Normal
+                  </button>
+                  <button
+                    type="button"
+                    className={`forensic-mode-btn ${detectionMode === "balanced" ? "active" : ""}`}
+                    onClick={() => handleModeChange("balanced")}
+                    style={{ padding: "3px 8px", fontSize: "10px" }}
+                  >
+                    Balanced
+                  </button>
+                  <button
+                    type="button"
+                    className={`forensic-mode-btn ${detectionMode === "strict" ? "active" : ""}`}
+                    onClick={() => handleModeChange("strict")}
+                    style={{ padding: "3px 8px", fontSize: "10px" }}
+                  >
+                    Strict
+                  </button>
+                </div>
               </div>
             </div>
+
+            {detectionMode === "strict" && (
+              <div className="strict-mode-warning-banner" style={{ marginBottom: "12px" }}>
+                <span className="strict-mode-warning-icon">⚠️</span>
+                <span>
+                  <strong>Strict Mode Active:</strong> Maximizes sensitivity to subtle inpainting and micro-textures. In this mode, screenshots and compressed images may occasionally be flagged as partially manipulated or unsure.
+                </span>
+              </div>
+            )}
 
             {/* Two-Column Workbench */}
             <div className="studio-two-column-grid">

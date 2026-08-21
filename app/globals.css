@@ -551,6 +551,84 @@ body {
   line-height: 1.45;
 }
 
+/* ── Forensic Sensitivity Modes (Normal, Balanced, Strict) ── */
+.forensic-mode-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: var(--space-md);
+}
+
+.forensic-mode-toggle-group {
+  display: inline-flex;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 3px;
+  gap: 4px;
+  width: fit-content;
+}
+
+.forensic-mode-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all var(--dur-fast) ease;
+}
+
+.forensic-mode-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-raised);
+}
+
+.forensic-mode-btn.active {
+  background: var(--bg-overlay);
+  color: var(--text-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.forensic-mode-btn .mode-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+}
+
+.forensic-mode-btn.active .mode-badge {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-primary);
+}
+
+.strict-mode-warning-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(234, 179, 8, 0.08);
+  border: 1px solid rgba(234, 179, 8, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  color: #FDE047;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.strict-mode-warning-icon {
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
 /* ── 5. Sample Cases (Featured + Grid Architecture) ── */
 .sample-cases-section {
   margin-top: var(--space-2xl);
@@ -1462,6 +1540,9 @@ body {
 @media (max-width: 768px) {
   .nav-menu {
     display: none;
+  }
+  .cmdk-trigger-btn {
+    display: none !important;
   }
   .header-inner {
     padding: 8px 14px;
