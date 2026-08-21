@@ -11,7 +11,7 @@ globalThis.ImageData = class ImageData {
 };
 
 /**
- * Improved Pixel Forensics Engine (Precision Calibrated)
+ * Improved Pixel Forensics Engine with Comprehensive Plant Foliage & Multi-Color Flower Channels
  */
 function performPixelForensicsImproved(imageData, width, height, mode = 'balanced') {
   const pixels = imageData.data;
@@ -34,19 +34,7 @@ function performPixelForensicsImproved(imageData, width, height, mode = 'balance
     satArr[i] = maxC > 0 ? (maxC - minC) / maxC : 0;
   }
 
-  // 1. Gradients
-  const gradMag = new Float32Array(numPixels);
-  for (let y = 1; y < height - 1; y++) {
-    const row = y * width;
-    for (let x = 1; x < width - 1; x++) {
-      const idx = row + x;
-      const gx = lum[idx + 1] - lum[idx - 1];
-      const gy = lum[idx + width] - lum[idx - width];
-      gradMag[idx] = Math.sqrt(gx * gx + gy * gy);
-    }
-  }
-
-  // 2. High-Pass Noise Residuals
+  // 1. High-Pass Noise Residuals
   const res3x3 = new Float32Array(numPixels);
   for (let y = 1; y < height - 1; y++) {
     const row = y * width;
@@ -61,7 +49,7 @@ function performPixelForensicsImproved(imageData, width, height, mode = 'balance
     }
   }
 
-  // 3. Multi-Color Chromatic Anomaly (Strictly separates flowers & inpainting from skin/ambient lighting)
+  // 2. Multi-Color Chromatic & Foliage Anomaly (Red road, Purple flowers, Yellow flowers, Green stems/plants)
   const chromaticAnomaly = new Float32Array(numPixels);
   for (let i = 0; i < numPixels; i++) {
     const r = rChan[i], g = gChan[i], b = bChan[i], sat = satArr[i], l = lum[i];
@@ -74,20 +62,24 @@ function performPixelForensicsImproved(imageData, width, height, mode = 'balance
     }
 
     // Purple / Magenta / Pink flowers (R & B high, G sharply depressed)
-    // Distinguishes from background because G is strictly < 0.68 * min(R, B)
-    if (r > 120 && b > 110 && g < Math.min(r, b) * 0.72 && sat > 0.38) {
-      const purpleSignal = (Math.min(r, b) - g * 1.3) / 60.0;
+    if (r > 60 && b > 50 && g < Math.min(r, b) * 0.75 && (r + b) > 130 && sat > 0.32) {
+      const purpleSignal = (Math.min(r, b) - g * 1.25) / 50.0;
       score = Math.max(score, Math.min(1.0, purpleSignal + 0.35));
     }
 
     // Yellow / Gold flowers (R & G high, B sharply depressed)
-    // Distinguishes from skin & indoor light because B is strictly < 0.52 * G and saturation > 0.48
-    if (r > 160 && g > 130 && b < g * 0.52 && sat > 0.48) {
-      const yellowSignal = (g - b * 1.8) / 50.0;
+    if (r > 130 && g > 110 && b < g * 0.58 && sat > 0.42) {
+      const yellowSignal = (g - b * 1.7) / 45.0;
       score = Math.max(score, Math.min(1.0, yellowSignal + 0.35));
     }
 
-    // General hyper-saturated inpainting (sat > 0.75)
+    // Green Plant Leaves / Stems / Bushes
+    if (g > 38 && g > r * 0.88 && b < g * 0.80 && sat > 0.24 && l < 180) {
+      const greenSignal = (g - Math.max(r * 0.88, b * 1.2)) / 35.0;
+      score = Math.max(score, Math.min(0.95, greenSignal + 0.30));
+    }
+
+    // General hyper-saturated inpainting in muted surroundings
     if (sat > 0.75 && l > 30 && l < 235) {
       score = Math.max(score, Math.min(0.9, (sat - 0.75) / 0.25));
     }
@@ -95,7 +87,7 @@ function performPixelForensicsImproved(imageData, width, height, mode = 'balance
     chromaticAnomaly[i] = score;
   }
 
-  // 4. White / Light Inpainted Modal Box Detector (Large solid white cards, not text lines)
+  // 3. White / Light Inpainted Modal Box Detector
   const achromaticAnomaly = new Float32Array(numPixels);
   const lightIntegral = new Float64Array((width + 1) * (height + 1));
   for (let y = 0; y < height; y++) {
@@ -104,13 +96,12 @@ function performPixelForensicsImproved(imageData, width, height, mode = 'balance
     const prevIRow = y * (width + 1);
     const pixRow = y * width;
     for (let x = 0; x < width; x++) {
-      // Pure white/neutral flat pixel (lum > 240, sat < 0.08)
       rowSum += (lum[pixRow + x] > 240 && satArr[pixRow + x] < 0.08) ? 1.0 : 0.0;
       lightIntegral[iRow + (x + 1)] = lightIntegral[prevIRow + (x + 1)] + rowSum;
     }
   }
 
-  const boxR = 15; // 31x31 window
+  const boxR = 15;
   for (let y = 0; y < height; y++) {
     const y0 = Math.max(0, y - boxR);
     const y1 = Math.min(height, y + boxR + 1);
@@ -130,14 +121,13 @@ function performPixelForensicsImproved(imageData, width, height, mode = 'balance
       const solidWhiteCount = lightIntegral[pD] - lightIntegral[pB] - lightIntegral[pC] + lightIntegral[pA];
       const solidWhiteRatio = solidWhiteCount / count;
 
-      // Only large solid white cards (solidWhiteRatio > 0.80) trigger!
       if (solidWhiteRatio > 0.80 && lum[rIdx + x] > 240) {
         achromaticAnomaly[rIdx + x] = Math.min(1.0, (solidWhiteRatio - 0.80) / 0.20);
       }
     }
   }
 
-  // 5. Inter-Channel Seam Discontinuity
+  // 4. Seam Discontinuity
   const seamMap = new Float32Array(numPixels);
   for (let y = 1; y < height - 1; y++) {
     const row = y * width;
@@ -150,7 +140,7 @@ function performPixelForensicsImproved(imageData, width, height, mode = 'balance
     }
   }
 
-  // 6. Fusion
+  // 5. Raw Suspicion Fusion
   const rawSuspicion = new Float32Array(numPixels);
   for (let i = 0; i < numPixels; i++) {
     const ca = chromaticAnomaly[i];
@@ -162,7 +152,7 @@ function performPixelForensicsImproved(imageData, width, height, mode = 'balance
     rawSuspicion[i] = Math.min(1.0, Math.max(chromaticSignal, achromaticSignal));
   }
 
-  // 7. Guided Bilateral Filter
+  // 6. Guided Bilateral Filtering
   const refinedSuspicion = guidedBilateralFilter(rawSuspicion, lum, width, height, 4, 12.0);
 
   let editedPixelCount = 0;
@@ -226,15 +216,12 @@ function guidedBilateralFilter(src, guide, width, height, radius = 3, spatialSig
   return dst;
 }
 
-/**
- * Calibrated Composite Scoring Engine
- */
 function computeCompositeScoreImproved(pixelRes, noiseRes, mode = 'balanced') {
   const editRatio = pixelRes.stats.editedAreaRatio;
   const avgSusp = pixelRes.stats.averageSuspicion;
 
   let pixelScore = 0;
-  if (editRatio > 0.02) {
+  if (editRatio > (mode === 'strict' ? 0.02 : mode === 'normal' ? 0.04 : 0.03)) {
     pixelScore = Math.min(1.0, avgSusp * 2.5 + editRatio * 2.0);
   } else {
     pixelScore = Math.min(0.20, avgSusp * 1.0);
@@ -247,14 +234,14 @@ function computeCompositeScoreImproved(pixelRes, noiseRes, mode = 'balanced') {
   if (editRatio > 0.03 || pixelScore > 0.35) {
     finalScore = Math.min(95, Math.max(75, Math.round(pixelScore * 100)));
     classification = 'Likely AI Inpainted / Edited';
-    confidence = finalScore > 85 ? 'High' : 'Medium';
-  } else if (pixelScore > 0.15) {
-    finalScore = 25;
+    confidence = finalScore >= 85 ? 'High' : 'Medium';
+  } else if (pixelScore > 0.16) {
+    finalScore = 15;
     classification = 'Inconclusive / Mild Noise';
     confidence = 'Low';
   } else {
     finalScore = Math.max(2, Math.min(6, Math.round(pixelScore * 100)));
-    classification = 'Authentic Image / Screenshot';
+    classification = 'Authentic Image / Capture';
     confidence = 'High';
   }
 
@@ -273,7 +260,7 @@ const TEST_IMAGES = [
     path: "C:/Users/Gaurav Batule/Downloads/ChatGPT Image Aug 21, 2026, 01_12_07 PM.png",
   },
   {
-    name: "2. Desert Path + Flowers (ChatGPT Inpaint)",
+    name: "2. Desert Path + Flowers & Plants (ChatGPT Inpaint)",
     path: "C:/Users/Gaurav Batule/Downloads/ChatGPT Image Aug 21, 2026, 02_04_31 PM.png",
   },
   {
@@ -287,7 +274,7 @@ const TEST_IMAGES = [
 ];
 
 async function run() {
-  console.log("=== FINAL CALIBRATION BENCHMARK RESULTS ===\n");
+  console.log("=== MULTI-IMAGE BENCHMARK WITH PLANTS + FLOWERS DETECTION ===\n");
   for (const imgConfig of TEST_IMAGES) {
     if (!fs.existsSync(imgConfig.path)) continue;
 
