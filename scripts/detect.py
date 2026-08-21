@@ -52,38 +52,45 @@ def analyze_image(image_path):
 
     # --- 2. Chromatic & Illuminant Anomaly Field ---
     # Inpainted regions have chromatic deviations from global scene illuminance
-    # Red dominance / saturation anomaly
     red_dom = np.maximum(0, r - (g + b) * 0.6)
     chromatic_score = np.clip((red_dom - 35) / 45.0, 0, 1)
 
-    # HSV saturation & value disparity
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.float32)
     sat = hsv[:, :, 1] / 255.0
     val = hsv[:, :, 2] / 255.0
-
-    # General foreign object / synthetic color score
     color_anomaly = np.maximum(chromatic_score, np.clip((sat - 0.60) / 0.35, 0, 1) * (val > 0.15).astype(np.float32))
 
-    # --- 3. Splice Boundary & Inter-Channel Edge Discontinuity ---
-    # Gradient on color difference to catch inpainting blend seams
+    # --- 3. Achromatic / White Box & Text Inpainting Anomaly ---
+    # Detects alterations on white/light UI boxes, text replacement, or neutral surfaces
+    sobel_lum_x = cv2.Sobel(lum, cv2.CV_32F, 1, 0, ksize=3)
+    sobel_lum_y = cv2.Sobel(lum, cv2.CV_32F, 0, 1, ksize=3)
+    grad_lum = np.sqrt(sobel_lum_x**2 + sobel_lum_y**2)
+    
+    light_container = cv2.boxFilter((lum > 220).astype(np.float32), -1, (15, 15)) > 0.35
+    glyph_activity = cv2.boxFilter(grad_lum, -1, (7, 7))
+    achromatic_score = np.clip((glyph_activity - 12) / 35.0, 0, 1) * light_container.astype(np.float32)
+
+    # --- 4. Splice Boundary & Inter-Channel Edge Discontinuity ---
     diff_rg = r - g
     gx = cv2.Sobel(diff_rg, cv2.CV_32F, 1, 0, ksize=3)
     gy = cv2.Sobel(diff_rg, cv2.CV_32F, 0, 1, ksize=3)
     seam_mag = np.sqrt(gx**2 + gy**2)
     seam_score = np.clip(seam_mag / 40.0, 0, 1)
 
-    # --- 4. Error Level Analysis (ELA) ---
+    # --- 5. Error Level Analysis (ELA) ---
     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
     _, enc = cv2.imencode('.jpg', img, encode_param)
     recomp = cv2.imdecode(enc, 1).astype(np.float32)
     ela = np.mean(np.abs(img.astype(np.float32) - recomp), axis=2)
     ela_score = np.clip((ela - 2.0) / 10.0, 0, 1)
 
-    # --- 5. Multi-Layer Forensic Fusion ---
-    # Combine signals: Chromatic anomaly + seam boundary + noise dropout + ELA
-    raw_suspicion = color_anomaly * 0.70 + seam_score * 0.20 + noise_dropout * 0.10
+    # --- 6. Multi-Layer Forensic Fusion ---
+    # Combine signals: Chromatic anomaly + Achromatic inpainting + seam boundary + noise dropout
+    chromatic_signal = color_anomaly * 0.70 + seam_score * 0.20 + noise_dropout * 0.10
+    achromatic_signal = achromatic_score * 0.75
+    raw_suspicion = np.maximum(chromatic_signal, achromatic_signal)
 
-    # --- 6. Edge-Aware Guided Bilateral Contour Snapping ---
+    # --- 7. Edge-Aware Guided Bilateral Contour Snapping ---
     # Guide using the original luminance image so detection wraps around exact object contours
     guided = cv2.bilateralFilter(raw_suspicion.astype(np.float32), 9, 75, 75)
 

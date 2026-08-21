@@ -60,6 +60,24 @@ export default function HomePage() {
   // Load Verified Benchmark Presets
   const loadPreset = async (preset) => {
     setErrorMsg(null);
+    if (preset.id === 'user_recaptcha_modal') {
+      try {
+        const res = await fetch('/recaptcha_edited.png');
+        const blob = await res.blob();
+        const f = new File([blob], 'recaptcha_edited.png', { type: 'image/png' });
+        setActivePreset(preset);
+        setFile(f);
+        setImageUrl('/recaptcha_edited.png');
+        setState("analyzing");
+        setStepIndex(0);
+        setMaskVisible(true);
+        setViewMode("composite");
+      } catch (err) {
+        console.error(err);
+      }
+      return;
+    }
+
     if (preset.id === 'user_desert_path') {
       try {
         const res = await fetch('/sand_path_road_red.png');
