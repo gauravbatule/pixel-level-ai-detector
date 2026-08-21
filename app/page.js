@@ -14,7 +14,7 @@ const PIPELINE_STEPS = [
   "Checking chromatic & illuminant consistency",
   "Evaluating achromatic text & glyph inpainting",
   "Computing splice boundary gradients",
-  "Measuring JPEG compression quantization loss",
+  "Parsing EXIF, XMP & C2PA metadata tags",
   "Generating multi-signal forensic dossier",
 ];
 
@@ -46,6 +46,86 @@ export default function HomePage() {
   const mainCanvasRef = useRef(null);
   const overlayCanvasRef = useRef(null);
   const stageRef = useRef(null);
+  const waveformCanvasRef = useRef(null);
+
+  // Realistic Microscopic Pixel Matrix Inspector (Authentic Sensor Noise vs AI Diffusion Fill)
+  useEffect(() => {
+    if (state !== "idle" || !waveformCanvasRef.current) return;
+    const canvas = waveformCanvasRef.current;
+    const ctx = canvas.getContext("2d");
+    let animationFrameId;
+    let scanX = 0;
+
+    const w = canvas.width;
+    const h = canvas.height;
+    const imgData = ctx.createImageData(w, h);
+    const data = imgData.data;
+
+    const render = () => {
+      scanX = (scanX + 1.2) % w;
+
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const idx = (y * w + x) * 4;
+          let val = 24;
+
+          if (x < w * 0.52) {
+            // Left Half: Natural Camera Physical Shot Noise (Gaussian distribution)
+            const noise = (Math.random() - 0.5) * 38;
+            val = Math.min(255, Math.max(0, 36 + noise));
+            
+            // Subtle Bayer Grid pattern
+            if (x % 4 === 0 || y % 4 === 0) val *= 0.85;
+
+            data[idx] = val * 0.9;
+            data[idx + 1] = val;
+            data[idx + 2] = val * 1.1;
+          } else {
+            // Right Half: AI Synthetic Inpainting (Diffusion Noise Dropout)
+            const smoothNoise = (Math.sin(x * 0.08) * Math.cos(y * 0.08)) * 4 + (Math.random() - 0.5) * 4;
+            val = Math.min(255, Math.max(0, 30 + smoothNoise));
+
+            data[idx] = val * 1.05;
+            data[idx + 1] = val * 0.95;
+            data[idx + 2] = val * 0.95;
+          }
+
+          data[idx + 3] = 255;
+        }
+      }
+
+      ctx.putImageData(imgData, 0, 0);
+
+      // Splice Boundary Line
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(w * 0.52, 0);
+      ctx.lineTo(w * 0.52, h);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Moving Scanning Line
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(scanX, 0);
+      ctx.lineTo(scanX, h);
+      ctx.stroke();
+
+      // Text Overlays on Canvas
+      ctx.font = "9px 'JetBrains Mono', monospace";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
+      ctx.fillText("AUTHENTIC SENSOR", 8, 16);
+      ctx.fillStyle = "rgba(240, 106, 106, 0.85)";
+      ctx.fillText("AI INPAINTING", w * 0.56, 16);
+
+      animationFrameId = requestAnimationFrame(render);
+    };
+
+    render();
+    return () => cancelAnimationFrame(animationFrameId);
+  }, [state]);
 
   // Handle Drag & Drop / File selection
   const handleFileSelect = useCallback((f) => {
@@ -272,6 +352,7 @@ export default function HomePage() {
           pixelForensics,
           noiseAnalysis,
           elaAnalysis,
+          metadataAnalysis: metadataResult,
           heatmapImageData: heatmapResult.heatmapImageData,
           contourImageData: heatmapResult.contourImageData,
           pixelSuspicionMap: heatmapResult.pixelSuspicionMap,
@@ -433,9 +514,14 @@ export default function HomePage() {
     (p) => p.name.toLowerCase().includes(cmdkSearch.toLowerCase()) || p.category.toLowerCase().includes(cmdkSearch.toLowerCase())
   );
 
+  // Group sample presets for Option C (Featured + Grid)
+  const featuredPreset = SAMPLE_PRESETS.find((p) => p.id === 'user_desert_path') || SAMPLE_PRESETS[0];
+  const sidePresets = SAMPLE_PRESETS.filter((p) => p.id === 'user_recaptcha_modal' || p.id === 'inpainting_edit');
+  const bottomPresets = SAMPLE_PRESETS.filter((p) => p.id !== 'user_desert_path' && p.id !== 'user_recaptcha_modal' && p.id !== 'inpainting_edit');
+
   return (
     <div className="app-shell">
-      {/* ── 1. Sophisticated Header Navigation System ── */}
+      {/* ── 1. Sophisticated Header Navigation ── */}
       <header className="app-header">
         <div className="header-inner">
           <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
@@ -477,7 +563,7 @@ export default function HomePage() {
                 className="nav-item"
                 onClick={() => {
                   if (state !== "idle") resetSession();
-                  window.scrollTo({ top: 600, behavior: "smooth" });
+                  window.scrollTo({ top: 680, behavior: "smooth" });
                 }}
               >
                 Benchmarks
@@ -503,8 +589,7 @@ export default function HomePage() {
             </button>
 
             <div className="privacy-pill">
-              <span className="status-indicator-dot" />
-              <span>Local processing</span>
+              <span>LOCAL PROCESSING · PRIVATE</span>
             </div>
 
             {state === "results" && (
@@ -523,7 +608,7 @@ export default function HomePage() {
 
       <main className="workspace-container">
         {errorMsg && (
-          <div style={{ padding: "12px 16px", background: "var(--signal-manipulated-bg)", border: "1px solid var(--signal-manipulated-bd)", borderRadius: "var(--radius-sm)", color: "var(--signal-manipulated)", marginBottom: "16px", fontSize: "12px" }}>
+          <div style={{ padding: "12px 16px", background: "var(--signal-coral-bg)", border: "1px solid var(--signal-coral-bd)", borderRadius: "var(--radius-sm)", color: "var(--signal-coral)", marginBottom: "16px", fontSize: "12px" }}>
             {errorMsg}
           </div>
         )}
@@ -531,20 +616,43 @@ export default function HomePage() {
         {/* ── 2. IDLE STATE: WORKSPACE & UPLOAD CONSOLE ── */}
         {state === "idle" && (
           <div>
-            {/* Main Workspace Header */}
-            <div className="workspace-header">
-              <div className="eyebrow-tag">
-                <span>IMAGE FORENSICS</span>
+            {/* Main Editorial Hero with Realistic Pixel Matrix Inspector */}
+            <div className="hero-two-column-layout">
+              <div className="hero-left-column">
+                <div className="eyebrow-tag">
+                  <span>IMAGE FORENSICS</span>
+                </div>
+                <h1 className="workspace-hero-heading">
+                  Analyze the image.<br />
+                  <span className="hero-accent-text">Find the evidence.</span>
+                </h1>
+                <p className="workspace-hero-sub">
+                  Detect AI generation, manipulation, inpainting, and synthetic artifacts with client-side multi-signal forensic analysis.
+                </p>
+                <div className="hero-capabilities-chips">
+                  {["PRNU Sensor Noise", "Illuminant Vector Delta", "Achromatic Halos", "EXIF / C2PA Provenance", "Bayer Demosaicing"].map((cap) => (
+                    <span key={cap} className="hero-cap-chip">{cap}</span>
+                  ))}
+                </div>
               </div>
-              <h1 className="workspace-hero-heading">
-                Analyze an image. Find the evidence.
-              </h1>
-              <p className="workspace-hero-sub">
-                Detect AI generation, manipulation, inpainting, and synthetic artifacts with client-side forensic analysis.
-              </p>
+
+              {/* Right Side: Realistic Microscopic Pixel Sensor Matrix Inspector */}
+              <div className="hero-instrument-schematic">
+                <div className="instrument-top-bar">
+                  <span>MICROSCOPIC PIXEL FORENSICS</span>
+                  <span style={{ color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>LIVE SENSOR MATRIX</span>
+                </div>
+                <div className="instrument-canvas-box">
+                  <canvas ref={waveformCanvasRef} width={340} height={120} />
+                </div>
+                <div className="instrument-readout-row">
+                  <span>CAMERA NOISE: σ² = 14.8</span>
+                  <span style={{ color: "var(--signal-coral)" }}>DIFFUSION FILL: σ² = 1.2</span>
+                </div>
+              </div>
             </div>
 
-            {/* Premium Forensic Workstation Upload Surface */}
+            {/* Signature Workstation Upload Zone */}
             <div
               className={`workstation-upload-box ${dragOver ? "drag-over" : ""}`}
               onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFileSelect(e.dataTransfer.files[0]); }}
@@ -555,7 +663,7 @@ export default function HomePage() {
               <div className="upload-icon-circle">⤓</div>
               <div>
                 <div className="upload-title-text">Drop an image to begin</div>
-                <div className="upload-sub-text">or choose a file from your device</div>
+                <div className="upload-sub-text">Drag & drop or choose a file from your device</div>
               </div>
 
               <div className="upload-btn-group" onClick={(e) => e.stopPropagation()}>
@@ -590,55 +698,127 @@ export default function HomePage() {
               />
             </div>
 
-            {/* 3-Step "How It Works" Visual Architecture */}
-            <div className="how-it-works-row">
-              <div className="how-step-card">
-                <span className="how-step-num">01 — INSPECT</span>
-                <span className="how-step-title">Signal Extraction</span>
-                <p className="how-step-desc">Extracts high-pass sensor shot noise, PRNU patterns, and demosaicing grids.</p>
-              </div>
-              <div className="how-step-card">
-                <span className="how-step-num">02 — ANALYZE</span>
-                <span className="how-step-title">Forensic Indicators</span>
-                <p className="how-step-desc">Evaluates chromatic fields, diffusion halos, and splice boundary gradients.</p>
-              </div>
-              <div className="how-step-card">
-                <span className="how-step-num">03 — EXPLAIN</span>
-                <span className="how-step-title">Evidence Confidence</span>
-                <p className="how-step-desc">Synthesizes localized pixel anomaly heatmaps with verifiable confidence scoring.</p>
+            {/* 3-Step Connected Process Timeline */}
+            <div className="process-timeline-container">
+              <div className="process-timeline-grid">
+                <div className="timeline-step-card">
+                  <div className="timeline-step-header">
+                    <span className="timeline-step-num">01 — INSPECT</span>
+                    <span style={{ fontSize: "11px", color: "var(--accent-electric)" }}>SIGNAL</span>
+                  </div>
+                  <span className="timeline-step-title">Pixel Signal Extraction</span>
+                  <p className="timeline-step-desc">Extracts high-pass sensor shot noise, PRNU pattern variance, and Bayer demosaicing grids.</p>
+                </div>
+                <div className="timeline-step-card">
+                  <div className="timeline-step-header">
+                    <span className="timeline-step-num">02 — ANALYZE</span>
+                    <span style={{ fontSize: "11px", color: "var(--accent-violet)" }}>EVALUATION</span>
+                  </div>
+                  <span className="timeline-step-title">Forensic Indicators</span>
+                  <p className="timeline-step-desc">Profiles chromatic illuminant vectors, diffusion halos, and splice boundary gradients.</p>
+                </div>
+                <div className="timeline-step-card">
+                  <div className="timeline-step-header">
+                    <span className="timeline-step-num">03 — EXPLAIN</span>
+                    <span style={{ fontSize: "11px", color: "var(--accent-cyan)" }}>EVIDENCE</span>
+                  </div>
+                  <span className="timeline-step-title">Evidence & Provenance</span>
+                  <p className="timeline-step-desc">Synthesizes localized pixel anomaly heatmaps with metadata and confidence scoring.</p>
+                </div>
               </div>
             </div>
 
-            {/* Rich Visual Sample Cases Section */}
+            {/* Sample Cases Section (Option C: Featured + Grid) */}
             <section className="sample-cases-section">
               <div className="sample-cases-header">
-                <h2 className="sample-cases-title">Explore sample analyses</h2>
-                <p className="sample-cases-sub">See how AI Detect responds to common manipulation patterns.</p>
+                <div>
+                  <h2 className="sample-cases-title">Explore sample analyses</h2>
+                  <p className="sample-cases-sub">See how AI Detect responds to common manipulation patterns.</p>
+                </div>
               </div>
 
-              <div className="sample-cases-grid">
-                {SAMPLE_PRESETS.map((preset) => (
+              {/* Featured Case + Side Stack */}
+              <div className="sample-featured-row">
+                {/* Featured Card */}
+                <div
+                  className="sample-case-featured-card"
+                  onClick={() => loadPreset(featuredPreset)}
+                >
+                  <div className="featured-thumb-frame">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={featuredPreset.thumbnail}
+                      alt={featuredPreset.name}
+                      className="featured-thumb-img"
+                    />
+                    <span className="sample-tag-overlay alert">
+                      FEATURED &middot; {featuredPreset.category}
+                    </span>
+                  </div>
+                  <div className="featured-body">
+                    <div>
+                      <div style={{ fontFamily: "var(--font-mono)", fontSize: "10px", color: "var(--signal-coral)", marginBottom: "4px" }}>
+                        PAIRED GROUND TRUTH BENCHMARK
+                      </div>
+                      <h3 style={{ fontSize: "16px", fontWeight: 700, marginBottom: "6px" }}>{featuredPreset.name}</h3>
+                      <p style={{ fontSize: "12px", color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                        {featuredPreset.description}
+                      </p>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "16px", fontSize: "12px", fontWeight: 600, color: "var(--accent-electric)" }}>
+                      <span>Run Forensic Verification</span>
+                      <span>→</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2 Side Cards */}
+                <div className="sample-side-stack">
+                  {sidePresets.map((preset) => (
+                    <div
+                      key={preset.id}
+                      className="sample-standard-card"
+                      onClick={() => loadPreset(preset)}
+                    >
+                      <div className="sample-card-body">
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                          <span className={`sample-tag-overlay ${preset.category.includes('Inpainting') ? 'alert' : ''}`} style={{ position: "static" }}>
+                            {preset.category}
+                          </span>
+                          <span style={{ fontSize: "11px", color: "var(--accent-electric)", fontWeight: 600 }}>Analyze →</span>
+                        </div>
+                        <h4 className="sample-card-title" style={{ marginTop: "4px" }}>{preset.name}</h4>
+                        <p className="sample-card-desc">{preset.description}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Bottom 3-Card Grid */}
+              <div className="sample-cases-bottom-grid">
+                {bottomPresets.map((preset) => (
                   <div
                     key={preset.id}
-                    className="sample-case-card"
+                    className="sample-standard-card"
                     onClick={() => loadPreset(preset)}
                   >
-                    <div className="sample-thumb-frame">
+                    <div className="standard-thumb-frame">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={preset.thumbnail}
                         alt={preset.name}
-                        className="sample-thumb-img"
+                        className="standard-thumb-img"
                       />
-                      <span className={`sample-tag-overlay ${preset.category.includes('Inpainting') ? 'alert' : ''}`}>
+                      <span className={`sample-tag-overlay ${preset.category.includes('Synthetic') || preset.category.includes('Generation') ? 'alert' : ''}`}>
                         {preset.category}
                       </span>
                     </div>
 
-                    <div className="sample-case-body">
-                      <h3 className="sample-case-name">{preset.name}</h3>
-                      <p className="sample-case-desc">{preset.description}</p>
-                      <div className="sample-case-footer">
+                    <div className="sample-card-body">
+                      <h4 className="sample-card-title">{preset.name}</h4>
+                      <p className="sample-card-desc">{preset.description}</p>
+                      <div className="sample-card-cta">
                         <span>Analyze sample</span>
                         <span>→</span>
                       </div>
@@ -811,7 +991,7 @@ export default function HomePage() {
                   >
                     <div className="hud-top-meta">
                       <span>X:{hoverData.x} Y:{hoverData.y}</span>
-                      <span style={{ color: hoverData.aiProb >= 40 ? "var(--signal-manipulated)" : "var(--signal-authentic)", fontWeight: 700 }}>
+                      <span style={{ color: hoverData.aiProb >= 40 ? "var(--signal-coral)" : "var(--signal-emerald)", fontWeight: 700 }}>
                         {hoverData.aiProb >= 40 ? "ANOMALOUS" : "NATURAL"}
                       </span>
                     </div>
@@ -835,7 +1015,7 @@ export default function HomePage() {
                 )}
               </div>
 
-              {/* Right Column: Findings & Evidence */}
+              {/* Right Column: Findings & Metadata */}
               <div className="findings-column">
                 {/* Primary Overall Assessment */}
                 <div className="overall-assessment-card">
@@ -849,10 +1029,10 @@ export default function HomePage() {
                   <div className="assessment-gauge-row">
                     <div className="gauge-svg-wrapper">
                       <svg viewBox="0 0 64 64" width="64" height="64">
-                        <circle cx="32" cy="32" r={radius} fill="none" stroke="var(--border-hairline)" strokeWidth="5" />
+                        <circle cx="32" cy="32" r={radius} fill="none" stroke="var(--border-default)" strokeWidth="5" />
                         <circle
                           cx="32" cy="32" r={radius} fill="none"
-                          stroke={scorePct >= 60 ? "var(--signal-manipulated)" : scorePct >= 30 ? "var(--signal-uncertain)" : "var(--signal-authentic)"}
+                          stroke={scorePct >= 60 ? "var(--signal-coral)" : scorePct >= 30 ? "var(--signal-amber)" : "var(--signal-emerald)"}
                           strokeWidth="5"
                           strokeLinecap="round"
                           strokeDasharray={circumference}
@@ -891,7 +1071,7 @@ export default function HomePage() {
                                 className="mini-bar-fill"
                                 style={{
                                   width: `${b.score}%`,
-                                  backgroundColor: b.score >= 60 ? "var(--signal-manipulated)" : b.score >= 30 ? "var(--signal-uncertain)" : "var(--signal-authentic)"
+                                  backgroundColor: b.score >= 60 ? "var(--signal-coral)" : b.score >= 30 ? "var(--signal-amber)" : "var(--signal-emerald)"
                                 }}
                               />
                             </div>
@@ -901,6 +1081,36 @@ export default function HomePage() {
                       ))}
                     </tbody>
                   </table>
+                </div>
+
+                {/* Dedicated Metadata & Provenance Panel */}
+                <div className="metadata-provenance-card">
+                  <div className="assessment-header">
+                    <span className="assessment-title">Metadata & Provenance</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px", color: results.metadataAnalysis?.stats?.hasC2PA ? "var(--signal-coral)" : "var(--signal-emerald)" }}>
+                      {results.metadataAnalysis?.stats?.hasC2PA ? "C2PA DETECTED" : "STANDARD EXIF"}
+                    </span>
+                  </div>
+                  <div className="meta-grid-table">
+                    <div className="meta-key-val-item">
+                      <span className="meta-k-label">CAMERA / MAKE</span>
+                      <span className="meta-v-text">{results.metadataAnalysis?.stats?.make || "None / Stripped"}</span>
+                    </div>
+                    <div className="meta-key-val-item">
+                      <span className="meta-k-label">SOFTWARE / ENGINE</span>
+                      <span className="meta-v-text">{results.metadataAnalysis?.stats?.aiToolsDetected?.length ? results.metadataAnalysis.stats.aiToolsDetected.join(", ") : (results.metadataAnalysis?.stats?.software || "Natural Capture")}</span>
+                    </div>
+                    <div className="meta-key-val-item">
+                      <span className="meta-k-label">FORMAT</span>
+                      <span className="meta-v-text">{results.metadataAnalysis?.stats?.fileFormat} ({results.dimensions})</span>
+                    </div>
+                    <div className="meta-key-val-item">
+                      <span className="meta-k-label">EXIF PRESENCE</span>
+                      <span className="meta-v-text" style={{ color: results.metadataAnalysis?.stats?.exifPresent ? "var(--signal-emerald)" : "var(--text-muted)" }}>
+                        {results.metadataAnalysis?.stats?.exifPresent ? "EXIF Present" : "No EXIF"}
+                      </span>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Action Suite */}
@@ -929,7 +1139,7 @@ export default function HomePage() {
                 </p>
                 <div className="deepdive-meta-footer">
                   <span>Demosaicing Grid</span>
-                  <span style={{ color: results.noiseAnalysis?.stats?.crossChannelScore < 0.2 ? "var(--signal-authentic)" : "var(--signal-uncertain)" }}>
+                  <span style={{ color: results.noiseAnalysis?.stats?.crossChannelScore < 0.2 ? "var(--signal-emerald)" : "var(--signal-amber)" }}>
                     {results.noiseAnalysis?.stats?.crossChannelScore < 0.2 ? "Natural Bayer Grid" : "Synthetic Frequencies"}
                   </span>
                 </div>
@@ -945,7 +1155,7 @@ export default function HomePage() {
                 </p>
                 <div className="deepdive-meta-footer">
                   <span>Inpainted Area</span>
-                  <span style={{ color: results.editedAreaPercent > 0 ? "var(--signal-manipulated)" : "var(--text-primary)" }}>
+                  <span style={{ color: results.editedAreaPercent > 0 ? "var(--signal-coral)" : "var(--text-primary)" }}>
                     {results.editedAreaPercent}%
                   </span>
                 </div>
@@ -1073,7 +1283,7 @@ export default function HomePage() {
               maxWidth: "600px",
               width: "100%",
               background: "var(--bg-surface)",
-              border: "1px solid var(--border-hairline)",
+              border: "1px solid var(--border-default)",
               borderRadius: "var(--radius-lg)",
               padding: "24px",
               display: "flex",
@@ -1109,12 +1319,15 @@ export default function HomePage() {
               <p>
                 <strong>4. Error Level Analysis (ELA):</strong> Identifies mismatches in JPEG 8x8 DCT quantization tables.
               </p>
+              <p>
+                <strong>5. Metadata & Provenance:</strong> Evaluates EXIF tags, software strings, and C2PA Content Credentials manifests.
+              </p>
             </div>
           </div>
         </div>
       )}
 
-      {/* ── 7. Minimal Professional Footer ── */}
+      {/* ── 7. Minimal Understated Footer ── */}
       <footer className="app-footer">
         <div className="footer-inner-content">
           <div>
@@ -1153,6 +1366,7 @@ function downloadJSON(res) {
     editedAreaPercent: res.editedAreaPercent,
     dimensions: res.dimensions,
     fileSize: res.fileSize,
+    metadata: res.metadataAnalysis?.stats || {},
     breakdown: res.breakdown,
   };
   const blob = new Blob([JSON.stringify(dossier, null, 2)], { type: "application/json" });
