@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import Image from "next/image";
 import { SAMPLE_PRESETS, generateAuthenticSample, generateInpaintedSample, generateFullAISample } from "../lib/dataset/samples";
 import { performPixelForensics } from "../lib/analysis/pixelForensics";
 import { performNoiseAnalysis } from "../lib/analysis/noise";
@@ -9,9 +10,10 @@ import { computeCompositeScore, generateCompositeHeatmap } from "../lib/analysis
 import { performMetadataAnalysis } from "../lib/analysis/metadata";
 
 const PIPELINE_STEPS = [
-  "Deep Spatial Matrix Loading",
-  "PRNU Sensor Shot Noise (Laplacian 3x3 + Box 9x9)",
-  "Chromatic & Illuminant Field Discrepancy",
+  "Spatial Tensor Initialization",
+  "PRNU Sensor Shot Noise Extraction",
+  "Chromatic & Illuminant Field Vector Discrepancy",
+  "Achromatic & White Surface Glyph Inpainting Analysis",
   "Splice Boundary & Edge Gradient Discontinuity",
   "Error Level Analysis (JPEG Quantization Residuals)",
   "Edge-Guided Bilateral Contour Snapping",
@@ -46,7 +48,7 @@ export default function HomePage() {
   // Handle Drag & Drop / File selection
   const handleFileSelect = useCallback((f) => {
     if (!f || !f.type.startsWith("image/")) return;
-    if (f.size > 40 * 1024 * 1024) { alert("File exceeds 40 MB threshold"); return; }
+    if (f.size > 40 * 1024 * 1024) { alert("File exceeds 40 MB limit"); return; }
     setActivePreset(null);
     setErrorMsg(null);
     setFile(f);
@@ -106,21 +108,21 @@ export default function HomePage() {
       canvas = generateAuthenticSample(800, 500);
       meta = { type: 'authentic', title: 'Authentic Photo Control' };
     } else {
-      const sample = generateFullAISample(800, 500);
-      canvas = sample.canvas;
-      meta = sample.metadata;
+      canvas = generateFullAISample(800, 500);
+      meta = { type: 'full_ai', title: '100% Synthetic Diffusion' };
     }
 
     canvas.toBlob((blob) => {
+      if (!blob) return;
       const f = new File([blob], `${preset.id}.png`, { type: 'image/png' });
       setActivePreset(preset);
       setFile(f);
-      setImageUrl(canvas.toDataURL());
+      setImageUrl(canvas.toDataURL('image/png'));
       setState("analyzing");
       setStepIndex(0);
       setMaskVisible(true);
       setViewMode("composite");
-    });
+    }, 'image/png');
   };
 
   const resetSession = () => {
@@ -128,32 +130,33 @@ export default function HomePage() {
     setFile(null);
     setImageUrl(null);
     setResults(null);
-    setStepIndex(0);
-    setMaskVisible(true);
-    setOpacity(0.75);
-    setSplitSliderOn(false);
+    setHoverData(null);
     setActivePreset(null);
     setErrorMsg(null);
-    setHoverData(null);
   };
 
-  // Pipeline Runner (Pure Client-Side / Vercel-Ready Forensics)
+  // Pipeline Execution
   useEffect(() => {
     if (state !== "analyzing" || !file || !imageUrl) return;
+
     let isCancelled = false;
+    let currentStep = 0;
 
     const timer = setInterval(() => {
-      setStepIndex((curr) => (curr < PIPELINE_STEPS.length - 1 ? curr + 1 : curr));
-    }, 240);
+      currentStep++;
+      if (currentStep < PIPELINE_STEPS.length - 1) {
+        setStepIndex(currentStep);
+      }
+    }, 180);
 
     (async () => {
       try {
-        const img = new Image();
+        const img = new window.Image();
         img.crossOrigin = "anonymous";
         img.src = imageUrl;
         await new Promise((resolve, reject) => {
           img.onload = resolve;
-          img.onerror = () => reject(new Error("Image failed to load in DOM"));
+          img.onerror = () => reject(new Error("Image failed to load in browser memory"));
         });
 
         if (isCancelled) return;
@@ -177,7 +180,7 @@ export default function HomePage() {
 
         const isLossless = file.type === "image/png" || file.type === "image/webp";
 
-        // Execute Multi-Spectral Modules
+        // Multi-Spectral Forensic Modules
         const pixelForensics = performPixelForensics(imgData, w, h, isLossless);
         const noiseAnalysis = performNoiseAnalysis(imgData, w, h);
         const elaAnalysis = await performELA(imgData, w, h, 0.90, 20, file.type);
@@ -193,7 +196,7 @@ export default function HomePage() {
           pixelForensics
         );
 
-        // Heatmap & Glowing Contour Generator
+        // Heatmap & Glowing Contours
         const heatmapResult = generateCompositeHeatmap(
           w,
           h,
@@ -241,14 +244,15 @@ export default function HomePage() {
     };
   }, [state, file, imageUrl]);
 
-  // Canvas Viewport Renderer
+  // Viewport Canvas Render
   useEffect(() => {
     if (!results || state !== "results") return;
     const mc = mainCanvasRef.current;
     const oc = overlayCanvasRef.current;
     if (!mc || !oc) return;
 
-    const { width: w, height: h, sourceImage, heatmapImageData, contourImageData, noiseAnalysis, elaAnalysis } = results;
+    const w = results.width;
+    const h = results.height;
 
     mc.width = w;
     mc.height = h;
@@ -256,84 +260,109 @@ export default function HomePage() {
     oc.height = h;
 
     const mctx = mc.getContext("2d");
-    mctx.drawImage(sourceImage, 0, 0, w, h);
-
     const octx = oc.getContext("2d");
+
+    mctx.clearRect(0, 0, w, h);
     octx.clearRect(0, 0, w, h);
 
+    // 1. Draw Base Source Image
+    mctx.drawImage(results.sourceImage, 0, 0, w, h);
+
+    // 2. Render Overlay Layer based on ViewMode
     if (maskVisible) {
-      // Pick Overlay Buffer based on Active View Mode
-      let targetImageData;
-      if (viewMode === "contour") {
-        targetImageData = contourImageData;
+      const overlayImgData = octx.createImageData(w, h);
+      const targetPixels = overlayImgData.data;
+
+      if (viewMode === "composite") {
+        const heatData = results.heatmapImageData.data;
+        for (let i = 0; i < w * h; i++) {
+          const idx = i * 4;
+          targetPixels[idx] = heatData[idx];
+          targetPixels[idx + 1] = heatData[idx + 1];
+          targetPixels[idx + 2] = heatData[idx + 2];
+          targetPixels[idx + 3] = Math.round(heatData[idx + 3] * opacity);
+        }
+      } else if (viewMode === "contour") {
+        const contourData = results.contourImageData.data;
+        for (let i = 0; i < w * h; i++) {
+          const idx = i * 4;
+          targetPixels[idx] = contourData[idx];
+          targetPixels[idx + 1] = contourData[idx + 1];
+          targetPixels[idx + 2] = contourData[idx + 2];
+          targetPixels[idx + 3] = Math.round(contourData[idx + 3] * opacity);
+        }
       } else if (viewMode === "noise") {
-        targetImageData = noiseAnalysis.noiseHeatmap;
+        const res3x3 = results.pixelForensics?.res3x3;
+        for (let i = 0; i < w * h; i++) {
+          const idx = i * 4;
+          const v = Math.min(255, Math.round((res3x3 ? res3x3[i] : 0) * 8));
+          targetPixels[idx] = v;
+          targetPixels[idx + 1] = v;
+          targetPixels[idx + 2] = v;
+          targetPixels[idx + 3] = Math.round(255 * opacity);
+        }
       } else if (viewMode === "ela") {
-        targetImageData = elaAnalysis.heatmapData;
-      } else {
-        targetImageData = heatmapImageData; // composite
+        const elaCanvas = results.elaAnalysis?.elaCanvas;
+        if (elaCanvas) {
+          const elaCtx = elaCanvas.getContext("2d");
+          const elaData = elaCtx.getImageData(0, 0, w, h).data;
+          for (let i = 0; i < w * h; i++) {
+            const idx = i * 4;
+            targetPixels[idx] = elaData[idx];
+            targetPixels[idx + 1] = elaData[idx + 1];
+            targetPixels[idx + 2] = elaData[idx + 2];
+            targetPixels[idx + 3] = Math.round(255 * opacity);
+          }
+        }
       }
 
-      // Render Overlay Buffer to temp canvas for alpha blending & split clipping
-      const tempCanvas = document.createElement("canvas");
-      tempCanvas.width = w;
-      tempCanvas.height = h;
-      tempCanvas.getContext("2d").putImageData(targetImageData, 0, 0);
-
-      octx.save();
+      // Split Slider Mask Clipping
       if (splitSliderOn) {
-        const splitX = (sliderPos / 100) * w;
-        octx.beginPath();
-        octx.rect(0, 0, splitX, h);
-        octx.clip();
+        const splitX = Math.round((sliderPos / 100) * w);
+        for (let y = 0; y < h; y++) {
+          for (let x = splitX; x < w; x++) {
+            targetPixels[(y * w + x) * 4 + 3] = 0;
+          }
+        }
       }
 
-      octx.globalAlpha = opacity;
-      octx.drawImage(tempCanvas, 0, 0, w, h);
-      octx.restore();
-
-      if (splitSliderOn) {
-        const splitX = (sliderPos / 100) * w;
-        octx.strokeStyle = "#ffffff";
-        octx.lineWidth = 2;
-        octx.beginPath();
-        octx.moveTo(splitX, 0);
-        octx.lineTo(splitX, h);
-        octx.stroke();
-      }
+      octx.putImageData(overlayImgData, 0, 0);
     }
   }, [results, state, maskVisible, opacity, viewMode, splitSliderOn, sliderPos]);
 
-  // Handle Mouse Hover Pixel Inspector HUD
+  // Live Hover HUD Inspector
   const handleMouseMoveOnCanvas = (e) => {
     if (!results || !mainCanvasRef.current) return;
     const canvas = mainCanvasRef.current;
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
 
-    const px = Math.floor((e.clientX - rect.left) * scaleX);
-    const py = Math.floor((e.clientY - rect.top) * scaleY);
+    const scaleX = results.width / rect.width;
+    const scaleY = results.height / rect.height;
 
-    if (px < 0 || px >= canvas.width || py < 0 || py >= canvas.height) {
+    const x = Math.round((e.clientX - rect.left) * scaleX);
+    const y = Math.round((e.clientY - rect.top) * scaleY);
+
+    if (x < 0 || x >= results.width || y < 0 || y >= results.height) {
       setHoverData(null);
       return;
     }
 
-    const idx = py * canvas.width + px;
-    const pixData = results.imageData.data;
-    const r = pixData[idx * 4];
-    const g = pixData[idx * 4 + 1];
-    const b = pixData[idx * 4 + 2];
+    const idx = y * results.width + x;
+    const pixIdx = idx * 4;
+    const r = results.imageData.data[pixIdx];
+    const g = results.imageData.data[pixIdx + 1];
+    const b = results.imageData.data[pixIdx + 2];
 
     const aiProb = results.pixelSuspicionMap ? Math.round(results.pixelSuspicionMap[idx] * 100) : 0;
-    const noiseVar = results.pixelForensics?.localNoiseVar ? results.pixelForensics.localNoiseVar[idx].toFixed(1) : "0.0";
+    const noiseVar = results.pixelForensics?.localNoiseVar ? results.pixelForensics.localNoiseVar[idx].toFixed(2) : "0.00";
     const seamVal = results.pixelForensics?.spliceMap ? Math.round(results.pixelForensics.spliceMap[idx] * 100) : 0;
 
     setHoverData({
-      x: px,
-      y: py,
-      r, g, b,
+      x,
+      y,
+      r,
+      g,
+      b,
       aiProb,
       noiseVar,
       seamVal,
@@ -342,31 +371,42 @@ export default function HomePage() {
     });
   };
 
-  const handleMouseLeaveCanvas = () => {
-    setHoverData(null);
-  };
+  const handleMouseLeaveCanvas = () => setHoverData(null);
 
-  const scorePct = results?.overallScore ?? 0;
+  const scorePct = results?.overallScore || 0;
   const radius = 38;
   const circumference = 2 * Math.PI * radius;
 
   return (
     <div className="shell">
-      {/* ── Swiss Nav Header ── */}
+      {/* ── High-End Navigation Bar ── */}
       <header className="nav-header">
         <div className="nav-inner">
           <button className="brand" onClick={resetSession} type="button">
-            <div className="brand-symbol">PX</div>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/synthrex_logo.jpg"
+              alt="AI Detect Logo"
+              className="brand-logo-img"
+              width={34}
+              height={34}
+            />
             <div className="brand-text">
-              <span className="brand-title">AI Pixel Detector</span>
-              <span className="brand-sub">Swiss Forensic Engine // v2.4</span>
+              <div className="brand-title-wrap">
+                <span className="brand-title">AI Detect</span>
+                <span className="brand-badge">PRO v2.5</span>
+              </div>
+              <span className="brand-sub">SYNTHREX FORENSICS SUITE</span>
             </div>
           </button>
 
           <div className="nav-telemetry">
+            <div className="domain-pill">
+              <span>aidetector.synthrex.in</span>
+            </div>
             <div className="status-indicator">
               <span className="status-dot" />
-              <span>Vercel Edge Ready</span>
+              <span>Core Ready</span>
             </div>
             {state === "results" && (
               <button className="btn-ghost" onClick={resetSession} type="button">
@@ -379,23 +419,27 @@ export default function HomePage() {
 
       <main className="main-container">
         {errorMsg && (
-          <div style={{ padding: "14px", background: "rgba(239, 68, 68, 0.1)", border: "1px solid var(--signal-red-border)", borderRadius: "6px", color: "var(--signal-red)", margin: "20px 0" }}>
+          <div style={{ padding: "14px", background: "rgba(244, 63, 94, 0.12)", border: "1px solid var(--signal-ai-bd)", borderRadius: "8px", color: "var(--signal-ai)", margin: "20px 0", fontSize: "13px" }}>
             {errorMsg}
           </div>
         )}
 
-        {/* ── 1. IDLE STATE (Swiss Bento Hero) ── */}
+        {/* ── 1. IDLE STATE ── */}
         {state === "idle" && (
           <div className="idle-hero">
-            <div className="hero-badge">
-              <span>● MULTI-SPECTRAL SENSOR FORENSICS</span>
+            <div className="hero-header">
+              <div className="hero-pill-badge">
+                <span>✦ MULTI-SPECTRAL SENSOR FORENSICS & INPAINTING LOCALIZATION</span>
+              </div>
+              <h1 className="hero-heading">
+                Pixel-Level <span className="hero-heading-gradient">AI & Synthetic Media</span> Detection
+              </h1>
+              <p className="hero-subtitle">
+                Advanced spatial noise residual extraction, chromatic illuminant vector profiling, and high-precision splice boundary gradients to detect AI inpaintings, generative fills, and deepfakes.
+              </p>
             </div>
-            <h1 className="hero-heading">Pixel-Level AI Forensic & Inpainting Detector</h1>
-            <p className="hero-subtitle">
-              Calculates PRNU sensor noise variance, chromatic illuminant vectors, and splice boundary gradients to isolate AI inpainting down to exact pixels.
-            </p>
 
-            {/* Swiss Dropzone */}
+            {/* Luxury Dropzone */}
             <div
               className={`swiss-dropzone ${dragOver ? "active" : ""}`}
               onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFileSelect(e.dataTransfer.files[0]); }}
@@ -403,9 +447,10 @@ export default function HomePage() {
               onDragLeave={() => setDragOver(false)}
               onClick={() => fileInputRef.current?.click()}
             >
-              <div className="drop-icon-box">+</div>
-              <p className="drop-headline">Drop image or screenshot to analyze</p>
-              <p className="drop-meta">Supports UHD JPEG, PNG Screenshots, WebP &middot; 100% In-Browser Private</p>
+              <div className="drop-icon-box">⚡</div>
+              <p className="drop-headline">Drop an image or screenshot for forensic inspection</p>
+              <p className="drop-meta">Supports UHD JPEG, PNG Screenshots, WebP &middot; 100% In-Browser Cryptographic Privacy</p>
+              <button type="button" className="drop-cta-btn">Select Image File</button>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -415,16 +460,16 @@ export default function HomePage() {
               />
             </div>
 
-            {/* Bento Sample Repository */}
+            {/* Curated Diagnostic Presets */}
             <div className="bento-section">
-              <div className="section-label">
-                <span>Verified Diagnostic Presets</span>
+              <div className="section-label-header">
+                <span className="section-label">Verified Diagnostic Presets</span>
               </div>
               <div className="bento-sample-grid">
                 {SAMPLE_PRESETS.map((preset) => (
                   <div key={preset.id} className="bento-card" onClick={() => loadPreset(preset)}>
                     <div className="bento-card-header">
-                      <span className={`bento-tag ${preset.id === 'user_desert_path' ? 'tag-user' : ''}`}>
+                      <span className={`bento-tag ${preset.id.startsWith('user_') ? 'tag-user' : ''}`}>
                         {preset.tag}
                       </span>
                       <span className="bento-arrow">↗</span>
@@ -436,15 +481,16 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* Diagnostic Capability Chips */}
+            {/* Capability Bar */}
             <div className="capability-bar">
               {[
                 "PRNU High-Pass Shot Noise",
+                "Achromatic Text Inpainting Anomaly",
                 "Color Vector Inconsistency",
                 "Splice Boundary Discontinuity",
-                "Guided Bilateral Contours",
+                "Edge-Guided Bilateral Contours",
                 "Error Level Analysis (ELA)",
-                "Screenshot Invariance",
+                "Screenshot & Resample Invariance",
               ].map((cap) => (
                 <span key={cap} className="cap-chip">{cap}</span>
               ))}
@@ -457,8 +503,8 @@ export default function HomePage() {
           <div className="scan-container">
             <div className="scan-card">
               <div className="scan-header">
-                <span className="scan-title">Running Multi-Spectral Forensic Matrix</span>
-                <span className="scan-pulse">PROCESSING</span>
+                <span className="scan-title">Executing Multi-Spectral Forensic Matrix</span>
+                <span className="scan-pulse">ANALYZING</span>
               </div>
 
               <div className="scan-progress-track">
@@ -496,7 +542,8 @@ export default function HomePage() {
                 <div>PIXELS: <span className="telemetry-val">{(results.width * results.height).toLocaleString()}</span></div>
               </div>
               <div className="telemetry-items">
-                <div>ENGINE: <span className="telemetry-val" style={{ color: "var(--signal-blue)" }}>CLIENT JS V2.4</span></div>
+                <div>CORE: <span className="telemetry-val" style={{ color: "var(--brand-cyan)" }}>CLIENT FORENSICS V2.5</span></div>
+                <div>HOST: <span className="telemetry-val">aidetector.synthrex.in</span></div>
               </div>
             </div>
 
@@ -571,7 +618,7 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* Hairline Comparison Slider Bar */}
+            {/* Hairline Comparison Slider */}
             {splitSliderOn && (
               <div className="split-slider-hairline">
                 <span>Drag to compare Original Photo (Right) vs AI Detection Mask (Left):</span>
@@ -604,25 +651,25 @@ export default function HomePage() {
               <div
                 className="inspector-hud"
                 style={{
-                  left: `${Math.min(window.innerWidth - 240, hoverData.clientX + 16)}px`,
-                  top: `${Math.min(window.innerHeight - 180, hoverData.clientY + 16)}px`,
+                  left: `${Math.min(window.innerWidth - 250, hoverData.clientX + 16)}px`,
+                  top: `${Math.min(window.innerHeight - 200, hoverData.clientY + 16)}px`,
                 }}
               >
                 <div className="hud-top">
                   <span className="hud-coords">X:{hoverData.x} Y:{hoverData.y}</span>
-                  <span className={`hud-pill ${hoverData.aiProb >= 42 ? "ai" : "auth"}`}>
-                    {hoverData.aiProb >= 42 ? "AI ANOMALY" : "AUTHENTIC"}
+                  <span className={`hud-pill ${hoverData.aiProb >= 40 ? "ai" : "auth"}`}>
+                    {hoverData.aiProb >= 40 ? "AI ANOMALY" : "AUTHENTIC"}
                   </span>
                 </div>
                 <div className="hud-data">
                   <div className="hud-metric-row">
                     <span>AI Probability</span>
-                    <span className="val" style={{ color: hoverData.aiProb >= 42 ? "var(--signal-red)" : "var(--signal-green)" }}>
+                    <span className="val" style={{ color: hoverData.aiProb >= 40 ? "var(--signal-ai)" : "var(--signal-auth)" }}>
                       {hoverData.aiProb}%
                     </span>
                   </div>
                   <div className="hud-metric-row">
-                    <span>RGB Value</span>
+                    <span>RGB Vector</span>
                     <span className="val">({hoverData.r}, {hoverData.g}, {hoverData.b})</span>
                   </div>
                   <div className="hud-metric-row">
@@ -637,21 +684,21 @@ export default function HomePage() {
               </div>
             )}
 
-            {/* ── Bento Telemetry Grid ── */}
+            {/* ── Bento Telemetry Studio ── */}
             <div className="bento-telemetry-grid">
               {/* Cell 1: Overall Verdict */}
               <div className="bento-cell cell-verdict">
-                <div className="section-label">
-                  <span>Forensic Verdict</span>
+                <div className="section-label-header">
+                  <span className="section-label">Forensic Verdict</span>
                 </div>
                 <div className="verdict-gauge-wrap">
                   <div className="gauge-svg-box">
                     <svg viewBox="0 0 88 88" width="88" height="88">
-                      <circle cx="44" cy="44" r={radius} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="5" />
+                      <circle cx="44" cy="44" r={radius} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="6" />
                       <circle
                         cx="44" cy="44" r={radius} fill="none"
-                        stroke={scorePct >= 60 ? "var(--signal-red)" : scorePct >= 30 ? "var(--signal-amber)" : "var(--signal-green)"}
-                        strokeWidth="5"
+                        stroke={scorePct >= 60 ? "var(--signal-ai)" : scorePct >= 30 ? "var(--signal-warn)" : "var(--signal-auth)"}
+                        strokeWidth="6"
                         strokeLinecap="round"
                         strokeDasharray={circumference}
                         strokeDashoffset={circumference - (scorePct / 100) * circumference}
@@ -678,8 +725,8 @@ export default function HomePage() {
 
               {/* Cell 2: Multi-Spectral Signal Breakdown */}
               <div className="bento-cell cell-breakdown">
-                <div className="section-label">
-                  <span>Multi-Spectral Signal Matrix</span>
+                <div className="section-label-header">
+                  <span className="section-label">Multi-Spectral Signal Matrix</span>
                 </div>
                 <div className="signal-rows">
                   {results.breakdown && Object.values(results.breakdown).map((b) => (
@@ -699,41 +746,35 @@ export default function HomePage() {
 
               {/* Cell 3: Quantitative Geometry */}
               <div className="bento-cell cell-metrics">
-                <div className="section-label">
-                  <span>Pixel Geometry Diagnostics</span>
+                <div className="section-label-header">
+                  <span className="section-label">Spatial Geometry</span>
                 </div>
                 <div className="geometry-grid">
                   <div className="geom-stat">
                     <span className="geom-lbl">Inpainted Area</span>
-                    <span className="geom-val" style={{ color: "var(--signal-red)" }}>{results.editedAreaPercent}%</span>
+                    <span className="geom-val" style={{ color: "var(--signal-ai)" }}>{results.editedAreaPercent}%</span>
                   </div>
                   <div className="geom-stat">
                     <span className="geom-lbl">Affected Pixels</span>
                     <span className="geom-val">{results.pixelForensics?.stats?.editedPixelCount?.toLocaleString() || "0"}</span>
                   </div>
                   <div className="geom-stat">
-                    <span className="geom-lbl">Sensor Shot Noise</span>
+                    <span className="geom-lbl">Sensor Noise (σ²)</span>
                     <span className="geom-val">{results.noiseAnalysis?.stats?.averageNoiseVariance ? results.noiseAnalysis.stats.averageNoiseVariance.toFixed(1) : "N/A"}</span>
-                  </div>
-                  <div className="geom-stat">
-                    <span className="geom-lbl">Bayer Demosaicing</span>
-                    <span className="geom-val" style={{ color: results.noiseAnalysis?.stats?.crossChannelScore < 0.2 ? "var(--signal-green)" : "var(--signal-amber)" }}>
-                      {results.noiseAnalysis?.stats?.crossChannelScore < 0.2 ? "Verified" : "Synthetic"}
-                    </span>
                   </div>
                 </div>
               </div>
 
               {/* Cell 4: Action Suite */}
               <div className="bento-cell cell-actions">
-                <div className="section-label">
-                  <span>Export Suite</span>
+                <div className="section-label-header">
+                  <span className="section-label">Export Suite</span>
                 </div>
                 <div className="action-stack">
                   <button className="swiss-btn btn-accent" onClick={() => downloadJSON(results)} type="button">
                     ↓ Export JSON Dossier
                   </button>
-                  <button className="swiss-btn" onClick={() => downloadCanvas(overlayCanvasRef.current, "ai-pixel-contour-mask.png")} type="button">
+                  <button className="swiss-btn" onClick={() => downloadCanvas(overlayCanvasRef.current, "ai-detect-alpha-mask.png")} type="button">
                     ↓ Save Binary Alpha Mask
                   </button>
                 </div>
@@ -743,9 +784,14 @@ export default function HomePage() {
         )}
       </main>
 
-      {/* ── Swiss Footer ── */}
-      <footer className="swiss-footer">
-        Swiss Forensic Instrumentation &middot; Client-Side Spatial Matrix &middot; Vercel Ready
+      {/* ── Synthrex Footer ── */}
+      <footer className="synthrex-footer">
+        <div>
+          <strong>AI Detect</strong> by Synthrex Technologies &middot; Enterprise Pixel Forensics
+        </div>
+        <div>
+          Hosted at <a href="https://aidetector.synthrex.in" className="footer-domain-link" target="_blank" rel="noreferrer">aidetector.synthrex.in</a> &middot; Client-Side Spatial Matrix
+        </div>
       </footer>
     </div>
   );
@@ -753,7 +799,8 @@ export default function HomePage() {
 
 function downloadJSON(res) {
   const dossier = {
-    system: "AI Pixel Detector - Swiss Forensic Engine v2.4",
+    system: "AI Detect — Synthrex Forensics Engine v2.5",
+    domain: "aidetector.synthrex.in",
     timestamp: new Date().toISOString(),
     overallScore: res.overallScore,
     classification: res.classification,
@@ -764,7 +811,7 @@ function downloadJSON(res) {
     breakdown: res.breakdown,
   };
   const blob = new Blob([JSON.stringify(dossier, null, 2)], { type: "application/json" });
-  triggerDownload(URL.createObjectURL(blob), "forensic-pixel-dossier.json");
+  triggerDownload(URL.createObjectURL(blob), "ai-detect-forensic-dossier.json");
 }
 
 function downloadCanvas(canvas, filename) {
