@@ -275,18 +275,21 @@ export default function HomePage() {
       const scoreResult = computeCompositeScore(
         results.elaAnalysis,
         results.noiseAnalysis,
-        null,
+        results.frequencyAnalysis,
         null,
         results.metadataAnalysis,
         pixelForensics,
-        newMode
+        newMode,
+        results.origWidth || results.width,
+        results.origHeight || results.height,
+        results.imageData
       );
       const heatmapResult = generateCompositeHeatmap(
         results.width,
         results.height,
         results.elaAnalysis,
         results.noiseAnalysis,
-        null,
+        results.frequencyAnalysis,
         null,
         pixelForensics
       );
@@ -349,6 +352,7 @@ export default function HomePage() {
         // Multi-Spectral Forensic Modules
         const pixelForensics = performPixelForensics(imgData, w, h, isLossless, detectionMode);
         const noiseAnalysis = performNoiseAnalysis(imgData, w, h);
+        const frequencyAnalysis = performFrequencyAnalysis(imgData, w, h);
         const elaAnalysis = await performELA(imgData, w, h, 0.90, 20, file.type);
         const metadataResult = await performMetadataAnalysis(file, imgData, w, h);
 
@@ -356,11 +360,14 @@ export default function HomePage() {
         const scoreResult = computeCompositeScore(
           elaAnalysis,
           noiseAnalysis,
-          null,
+          frequencyAnalysis,
           null,
           metadataResult,
           pixelForensics,
-          detectionMode
+          detectionMode,
+          img.naturalWidth || w,
+          img.naturalHeight || h,
+          imgData
         );
 
         // Heatmap & Glowing Contours
@@ -369,7 +376,7 @@ export default function HomePage() {
           h,
           elaAnalysis,
           noiseAnalysis,
-          null,
+          frequencyAnalysis,
           null,
           pixelForensics
         );
@@ -383,10 +390,13 @@ export default function HomePage() {
           ...scoreResult,
           width: w,
           height: h,
+          origWidth: img.naturalWidth || w,
+          origHeight: img.naturalHeight || h,
           sourceImage: img,
           imageData: imgData,
           pixelForensics,
           noiseAnalysis,
+          frequencyAnalysis,
           elaAnalysis,
           metadataAnalysis: metadataResult,
           heatmapImageData: heatmapResult.heatmapImageData,
