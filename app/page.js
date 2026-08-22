@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { SAMPLE_PRESETS, generateAuthenticSample, generateInpaintedSample, generateFullAISample } from "../lib/dataset/samples";
 import { performPixelForensics } from "../lib/analysis/pixelForensics";
 import { performNoiseAnalysis } from "../lib/analysis/noise";
+import { performFrequencyAnalysis } from "../lib/analysis/frequency";
 import { performELA } from "../lib/analysis/ela";
 import { computeCompositeScore, generateCompositeHeatmap } from "../lib/analysis/scoring";
 import { performMetadataAnalysis } from "../lib/analysis/metadata";
