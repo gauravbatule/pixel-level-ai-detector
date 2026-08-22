@@ -292,7 +292,8 @@ export default function HomePage() {
         results.noiseAnalysis,
         results.frequencyAnalysis,
         null,
-        pixelForensics
+        pixelForensics,
+        scoreResult.classification?.includes('Full Synthesis') || scoreResult.overallScore >= 80
       );
       setResults(prev => ({
         ...prev,
@@ -379,7 +380,8 @@ export default function HomePage() {
           noiseAnalysis,
           frequencyAnalysis,
           null,
-          pixelForensics
+          pixelForensics,
+          scoreResult.classification?.includes('Full Synthesis') || scoreResult.overallScore >= 80
         );
 
         if (isCancelled) return;
